@@ -154,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   预览图        : {result.preview_png}")
         if result.viewer_html:
             print(f"   3D 网页查看器 : {result.viewer_html}")
+        if result.print_guide:
+            print(f"   切片工艺指导  : {result.print_guide}")
         try:
             gpath = generate_gallery(args.output)
             print(f"   3D 展厅画廊   : {gpath}")

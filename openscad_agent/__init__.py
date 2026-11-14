@@ -11,7 +11,7 @@ from .vision import AgnesVision, SpecParseError
 from .geometry import spec_to_scad, write_spec_and_scad
 from .log import setup_logging, get_logger
 from .spec import validate_spec, normalize_part
-from .doctor import check_printability, PrintabilityReport
+from .doctor import check_printability, PrintabilityReport, generate_print_guide
 from .gallery import generate_gallery
 
 __all__ = [
@@ -32,5 +32,6 @@ __all__ = [
     "generate_html_viewer",
     "check_printability",
     "PrintabilityReport",
+    "generate_print_guide",
     "generate_gallery",
 ]
