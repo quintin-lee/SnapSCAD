@@ -153,6 +153,65 @@ class MainWindow(QMainWindow):
     SETTINGS_ORG = "openscad_agent"
     SETTINGS_APP = "openscad_agent"
 
+    I18N = {
+        "zh": {
+            "title": "OpenSCAD Agent - 图片→3D模型",
+            "btn_build": "▶ 开始建模",
+            "btn_cancel": "⏹ 终止",
+            "idle": "空闲",
+            "box_input": "输入源",
+            "btn_pick_img": "📁 选择图片 (多选)",
+            "btn_clip": "📋 剪贴板粘贴截图",
+            "label_preset": "预设范例:",
+            "label_desc": "文字描述:",
+            "btn_enhance": "🪄 追加工程约束",
+            "box_params": "参数与模型提供商",
+            "view_persp": "透视 (主)",
+            "view_top": "俯视",
+            "view_front": "正视",
+            "view_iso": "等轴测",
+            "view_explode": "💥 爆炸图",
+            "btn_open_scad": "🚀 在 OpenSCAD 中打开 3D 模型",
+            "btn_web_viewer": "🌐 网页 3D 查看器",
+            "btn_gallery": "🏛️ 3D 展厅画廊",
+            "btn_dxf": "📐 激光切割 DXF",
+            "btn_zip": "📦 打包工程 ZIP",
+            "btn_printer": "🖨️ 发送至打印机",
+            "btn_open_dir": "📁 打开输出目录",
+            "tab_projects": "📚 历史工程库 (单击全景回溯)",
+            "tab_files": "📁 全部输出文件",
+            "btn_rerender": "⚡ 重新渲染源码",
+        },
+        "en": {
+            "title": "OpenSCAD Agent - Image to 3D CAD",
+            "btn_build": "▶ Start Build",
+            "btn_cancel": "⏹ Abort",
+            "idle": "Idle",
+            "box_input": "Input Source",
+            "btn_pick_img": "📁 Pick Images (Multi)",
+            "btn_clip": "📋 Paste Screenshot",
+            "label_preset": "CAD Presets:",
+            "label_desc": "Description:",
+            "btn_enhance": "🪄 Add Engineering Specs",
+            "box_params": "Settings & LLM Provider",
+            "view_persp": "Perspective",
+            "view_top": "Top",
+            "view_front": "Front",
+            "view_iso": "Isometric",
+            "view_explode": "💥 Explode",
+            "btn_open_scad": "🚀 Open in OpenSCAD",
+            "btn_web_viewer": "🌐 Web 3D Viewer",
+            "btn_gallery": "🏛️ 3D Showcase Gallery",
+            "btn_dxf": "📐 Laser Cut DXF",
+            "btn_zip": "📦 Export Project ZIP",
+            "btn_printer": "🖨️ Send to 3D Printer",
+            "btn_open_dir": "📁 Open Output Folder",
+            "tab_projects": "📚 Projects Catalog",
+            "tab_files": "📁 Output Files",
+            "btn_rerender": "⚡ Re-render SCAD",
+        }
+    }
+
     PRESETS = {
         "机械: 带沉孔圆形法兰 (Flange Mount)": (
             "一个工业级圆形法兰安装座，包含外径60mm厚度8mm的底盘，4个均布的M4沉孔，中央有一个直径25mm高20mm的凸台，中央贯穿12mm的轴孔。",
@@ -264,6 +323,12 @@ class MainWindow(QMainWindow):
 
         self.lbl_status = QLabel("空闲")
         lay.addWidget(self.lbl_status)
+
+        lay.addWidget(QLabel("🌐"))
+        self.cmb_lang = QComboBox()
+        self.cmb_lang.addItems(["简体中文", "English"])
+        self.cmb_lang.currentIndexChanged.connect(self.on_language_changed)
+        lay.addWidget(self.cmb_lang)
         return w
 
     def _build_input_panel(self) -> QWidget:
@@ -272,22 +337,23 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(4, 4, 4, 4)
 
         # 输入模式切换
-        mode_box = QGroupBox("输入源")
-        mode_lay = QVBoxLayout(mode_box)
+        self.mode_box = QGroupBox("输入源")
+        mode_lay = QVBoxLayout(self.mode_box)
         self.image_path = QLineEdit()
         self.image_path.setPlaceholderText("选择或拖入图片（支持多选）…")
         row_img_btns = QHBoxLayout()
-        btn_img = QPushButton("📁 选择图片 (多选)")
-        btn_img.clicked.connect(self.on_pick_image)
-        btn_clip = QPushButton("📋 剪贴板粘贴截图")
-        btn_clip.clicked.connect(self.on_paste_clipboard)
-        row_img_btns.addWidget(btn_img)
-        row_img_btns.addWidget(btn_clip)
+        self.btn_img = QPushButton("📁 选择图片 (多选)")
+        self.btn_img.clicked.connect(self.on_pick_image)
+        self.btn_clip = QPushButton("📋 剪贴板粘贴截图")
+        self.btn_clip.clicked.connect(self.on_paste_clipboard)
+        row_img_btns.addWidget(self.btn_img)
+        row_img_btns.addWidget(self.btn_clip)
         mode_lay.addWidget(self.image_path)
         mode_lay.addLayout(row_img_btns)
 
         row_preset = QHBoxLayout()
-        row_preset.addWidget(QLabel("预设范例:"))
+        self.lbl_preset = QLabel("预设范例:")
+        row_preset.addWidget(self.lbl_preset)
         self.cmb_preset = QComboBox()
         self.cmb_preset.addItems(["选择预设范例…"] + list(self.PRESETS.keys()))
         self.cmb_preset.currentIndexChanged.connect(self.on_preset_selected)
@@ -295,7 +361,8 @@ class MainWindow(QMainWindow):
         mode_lay.addLayout(row_preset)
 
         row_desc_hdr = QHBoxLayout()
-        row_desc_hdr.addWidget(QLabel("文字描述:"))
+        self.lbl_desc = QLabel("文字描述:")
+        row_desc_hdr.addWidget(self.lbl_desc)
         row_desc_hdr.addStretch(1)
         self.btn_enhance = QPushButton("🪄 追加工程约束")
         self.btn_enhance.setStyleSheet("font-size: 11px; padding: 2px 8px; color: #2563eb;")
@@ -311,11 +378,11 @@ class MainWindow(QMainWindow):
         self.txt_hint = QLineEdit()
         self.txt_hint.setPlaceholderText("补充说明（可选，帮助理解物体）")
         mode_lay.addWidget(self.txt_hint)
-        lay.addWidget(mode_box)
+        lay.addWidget(self.mode_box)
 
         # 参数
-        param_box = QGroupBox("参数与模型提供商")
-        param_lay = QVBoxLayout(param_box)
+        self.param_box = QGroupBox("参数与模型提供商")
+        param_lay = QVBoxLayout(self.param_box)
 
         # Provider 预设切换
         row_prov = QHBoxLayout()
@@ -412,7 +479,7 @@ class MainWindow(QMainWindow):
         self.chk_review.setChecked(True)
         param_lay.addWidget(self.chk_review)
 
-        lay.addWidget(param_box)
+        lay.addWidget(self.param_box)
 
         lay.addStretch(1)
         return w
@@ -572,6 +639,39 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 事件处理
     # ------------------------------------------------------------------
+
+    def on_language_changed(self) -> None:
+        """多语言切换：在简体中文与 English 间无缝热切。"""
+        lang = "en" if "English" in self.cmb_lang.currentText() else "zh"
+        d = self.I18N.get(lang, self.I18N["zh"])
+        self.setWindowTitle(d["title"])
+        self.btn_build.setText(d["btn_build"])
+        self.btn_cancel.setText(d["btn_cancel"])
+        self.mode_box.setTitle(d["box_input"])
+        self.btn_img.setText(d["btn_pick_img"])
+        self.btn_clip.setText(d["btn_clip"])
+        self.lbl_preset.setText(d["label_preset"])
+        self.lbl_desc.setText(d["label_desc"])
+        self.btn_enhance.setText(d["btn_enhance"])
+        self.param_box.setTitle(d["box_params"])
+        self.btn_view_persp.setText(d["view_persp"])
+        self.btn_view_top.setText(d["view_top"])
+        self.btn_view_front.setText(d["view_front"])
+        self.btn_view_iso.setText(d["view_iso"])
+        self.btn_view_explode.setText(d["view_explode"])
+        self.btn_open_scad.setText(d["btn_open_scad"])
+        self.btn_open_web.setText(d["btn_web_viewer"])
+        self.btn_gallery.setText(d["btn_gallery"])
+        self.btn_export_dxf.setText(d["btn_dxf"])
+        self.btn_pack_zip.setText(d["btn_zip"])
+        self.btn_send_printer.setText(d["btn_printer"])
+        self.btn_open_dir.setText(d["btn_open_dir"])
+        self.tabs_assets.setTabText(0, d["tab_projects"])
+        self.tabs_assets.setTabText(1, d["tab_files"])
+        self.btn_rerender.setText(d["btn_rerender"])
+        self.lbl_status.setText(d["idle"])
+        self._settings.setValue("language", lang)
+        self.log(f"Language switched to: {self.cmb_lang.currentText()}")
 
     def on_pick_image(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1317,6 +1417,8 @@ class MainWindow(QMainWindow):
             self.chk_review.setChecked(s.value("chk_review", True).lower() != "false")
         if s.contains("window_geometry"):
             self.restoreGeometry(s.value("window_geometry"))
+        if s.contains("language") and s.value("language") == "en":
+            self.cmb_lang.setCurrentIndex(1)
         if s.contains("splitter_sizes") and hasattr(self, "main_splitter"):
             try:
                 sizes = [int(x) for x in s.value("splitter_sizes")]
@@ -1340,6 +1442,7 @@ class MainWindow(QMainWindow):
         s.setValue("chk_review", str(self.chk_review.isChecked()))
         if hasattr(self, "main_splitter"):
             s.setValue("splitter_sizes", self.main_splitter.sizes())
+        s.setValue("language", "en" if "English" in self.cmb_lang.currentText() else "zh")
         s.setValue("window_geometry", self.saveGeometry())
         s.sync()
 
