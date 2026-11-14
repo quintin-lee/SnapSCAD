@@ -550,6 +550,19 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
   .toolbar button.active {{ background: #2563eb; font-weight: 600; }}
   .toolbar input[type="color"] {{ width: 28px; height: 28px; border: none; border-radius: 50%; cursor: pointer; background: transparent; }}
   .tip {{ position: absolute; bottom: 20px; right: 20px; font-size: 11px; color: #64748b; background: rgba(15,23,42,0.6); padding: 4px 10px; border-radius: 6px; }}
+
+  /* 浅色摄影棚主题 */
+  body.light-mode {{ background: radial-gradient(circle at center, #ffffff 0%, #cbd5e1 100%); color: #0f172a; }}
+  body.light-mode .hud {{ background: rgba(255, 255, 255, 0.9); border-color: rgba(0, 0, 0, 0.1); color: #0f172a; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+  body.light-mode .hud h1 {{ color: #0284c7; }}
+  body.light-mode .hud p {{ color: #64748b; }}
+  body.light-mode .stat {{ color: #334155; }}
+  body.light-mode .toolbar {{ background: rgba(255, 255, 255, 0.9); border-color: rgba(0, 0, 0, 0.15); box-shadow: 0 10px 25px rgba(0,0,0,0.15); }}
+  body.light-mode .toolbar button {{ background: #e2e8f0; color: #1e293b; }}
+  body.light-mode .toolbar button:hover {{ background: #0284c7; color: #fff; }}
+  body.light-mode .toolbar button.active {{ background: #0284c7; color: #fff; }}
+  body.light-mode .tip {{ background: rgba(255, 255, 255, 0.7); color: #64748b; }}
+  body.light-mode #clip-panel {{ background: rgba(255, 255, 255, 0.92); color: #1e293b; border-color: rgba(0,0,0,0.15); }}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -567,6 +580,8 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
   <button id="btn-wire">🕸️ 线框</button>
   <button id="btn-clip">✂️ 剖切</button>
   <button id="btn-ruler">📏 尺寸</button>
+  <button id="btn-theme">☀️ 浅色</button>
+  <button id="btn-full">⛶ 全屏</button>
   <button id="btn-reset">🎯 居中</button>
   <input type="color" id="picker-color" value="#38bdf8" title="更换模型颜色">
 </div>
@@ -761,6 +776,28 @@ window.addEventListener('DOMContentLoaded', () => {{
 
   document.getElementById('picker-color').addEventListener('input', (e) => {{
     material.color.set(e.target.value);
+  }});
+
+  // 浅色影棚 / 暗黑空间主题切换
+  let isLight = false;
+  const btnTheme = document.getElementById('btn-theme');
+  btnTheme.addEventListener('click', () => {{
+    isLight = !isLight;
+    document.body.classList.toggle('light-mode', isLight);
+    btnTheme.textContent = isLight ? '🌙 暗黑' : '☀️ 浅色';
+    scene.fog.color.setHex(isLight ? 0xcbd5e1 : 0x0f172a);
+  }});
+
+  // 全屏沉浸式切换
+  const btnFull = document.getElementById('btn-full');
+  btnFull.addEventListener('click', () => {{
+    if (!document.fullscreenElement) {{
+      document.documentElement.requestFullscreen().catch(() => {{}});
+      btnFull.textContent = '🗗 退出';
+    }} else {{
+      document.exitFullscreen().catch(() => {{}});
+      btnFull.textContent = '⛶ 全屏';
+    }}
   }});
 
   window.addEventListener('resize', () => {{
