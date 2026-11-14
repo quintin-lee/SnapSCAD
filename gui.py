@@ -182,6 +182,8 @@ class MainWindow(QMainWindow):
             "tab_projects": "📚 历史工程库 (单击全景回溯)",
             "tab_files": "📁 全部输出文件",
             "btn_rerender": "⚡ 重新渲染源码",
+            "btn_snapshot": "📸 保存快照",
+            "btn_rollback": "⏪ 回滚快照",
         },
         "en": {
             "title": "OpenSCAD Agent - Image to 3D CAD",
@@ -211,6 +213,8 @@ class MainWindow(QMainWindow):
             "tab_projects": "📚 Projects Catalog",
             "tab_files": "📁 Output Files",
             "btn_rerender": "⚡ Re-render SCAD",
+            "btn_snapshot": "📸 Snapshot",
+            "btn_rollback": "⏪ Rollback",
         }
     }
 
@@ -502,6 +506,17 @@ class MainWindow(QMainWindow):
         scad_bar = QHBoxLayout()
         scad_bar.addWidget(QLabel("<b>OpenSCAD 源码 (支持在线微调)</b>"))
         scad_bar.addStretch(1)
+
+        self.btn_snapshot = QPushButton("📸 保存快照")
+        self.btn_snapshot.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.btn_snapshot.clicked.connect(self.on_save_snapshot)
+        scad_bar.addWidget(self.btn_snapshot)
+
+        self.btn_rollback = QPushButton("⏪ 回滚快照")
+        self.btn_rollback.setStyleSheet("padding: 3px 8px; font-size: 11px;")
+        self.btn_rollback.clicked.connect(self.on_rollback_snapshot)
+        scad_bar.addWidget(self.btn_rollback)
+
         self.btn_rerender = QPushButton("⚡ 重新渲染源码")
         self.btn_rerender.setStyleSheet(
             "QPushButton { background-color: #059669; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; }"
@@ -676,6 +691,8 @@ class MainWindow(QMainWindow):
         self.tabs_assets.setTabText(0, d["tab_projects"])
         self.tabs_assets.setTabText(1, d["tab_files"])
         self.btn_rerender.setText(d["btn_rerender"])
+        self.btn_snapshot.setText(d["btn_snapshot"])
+        self.btn_rollback.setText(d["btn_rollback"])
         self.lbl_status.setText(d["idle"])
         self._settings.setValue("language", lang)
         self.log(f"Language switched to: {self.cmb_lang.currentText()}")
@@ -1253,6 +1270,46 @@ class MainWindow(QMainWindow):
             self.log(f"渲染预览图异常: {e}")
 
         self._refresh_file_list(outdir)
+
+    def on_save_snapshot(self) -> None:
+        """为当前 OpenSCAD 源码保存一个版本快照文件 (_v1.scad, _v2.scad...)。"""
+        src = self.txt_scad.toPlainText().strip()
+        if not src:
+            QMessageBox.warning(self, "提示", "源码为空，无法保存快照。")
+            return
+        out_dir = Path(self.txt_outdir.text().strip() or "out")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(self._scad_path).stem if self._scad_path else "model"
+        base_stem = stem.split("_v")[0]
+
+        existing = sorted(out_dir.glob(f"{base_stem}_v*.scad"))
+        next_v = len(existing) + 1
+        snap_file = out_dir / f"{base_stem}_v{next_v}.scad"
+        snap_file.write_text(src, encoding="utf-8")
+        self.log(f"📸 已成功保存版本快照: {snap_file.name}")
+        self._refresh_file_list(out_dir)
+
+    def on_rollback_snapshot(self) -> None:
+        """从历史版本快照中选择并一键回滚载入。"""
+        out_dir = Path(self.txt_outdir.text().strip() or "out")
+        stem = Path(self._scad_path).stem if self._scad_path else "model"
+        base_stem = stem.split("_v")[0]
+
+        snapshots = sorted(out_dir.glob(f"{base_stem}_v*.scad"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not snapshots:
+            snapshots = sorted(out_dir.glob("*_v*.scad"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not snapshots:
+            QMessageBox.information(self, "提示", "尚未保存任何版本快照。请先点击「保存快照」。")
+            return
+
+        items = [f"{s.name} ({datetime.datetime.fromtimestamp(s.stat().st_mtime).strftime('%H:%M:%S')}, {len(s.read_text('utf-8').splitlines())}行)" for s in snapshots]
+        chosen, ok = QInputDialog.getItem(self, "回滚源码快照", "请选择要回滚恢复的历史快照版本:", items, 0, False)
+        if ok and chosen:
+            idx = items.index(chosen)
+            target_snap = snapshots[idx]
+            txt = target_snap.read_text(encoding="utf-8")
+            self.txt_scad.setPlainText(txt)
+            self.log(f"⏪ 已回滚载入快照: {target_snap.name}")
 
     # ------------------------------------------------------------------
     # UI 辅助
