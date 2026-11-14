@@ -713,6 +713,7 @@ def generate_html_viewer(
   <button id="btn-wire">🕸️ 线框</button>
   <button id="btn-clip">✂️ 剖切</button>
   <button id="btn-ruler">📏 尺寸</button>
+  <button id="btn-cap">📸 截图</button>
   <button id="btn-theme">☀️ 浅色</button>
   <button id="btn-full">⛶ 全屏</button>
   <button id="btn-reset">🎯 居中</button>
@@ -779,7 +780,7 @@ window.addEventListener('DOMContentLoaded', () => {{
   scene.fog = new THREE.FogExp2(0x0f172a, 0.002);
 
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
-  const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
+  const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true, preserveDrawingBuffer: true }});
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -978,6 +979,17 @@ window.addEventListener('DOMContentLoaded', () => {{
       document.exitFullscreen().catch(() => {{}});
       btnFull.textContent = '⛶ 全屏';
     }}
+  }});
+
+  // 当前 3D 自定义视口高清透明截屏下载
+  const btnCap = document.getElementById('btn-cap');
+  btnCap.addEventListener('click', () => {{
+    renderer.render(scene, camera);
+    const dataUrl = renderer.domElement.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `{name}_custom_angle.png`;
+    a.click();
   }});
 
   window.addEventListener('resize', () => {{
