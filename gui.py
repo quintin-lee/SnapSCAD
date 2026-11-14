@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings, QUrl, QRegularExpression
-from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices, QKeySequence, QSyntaxHighlighter, QTextCharFormat
+from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices, QKeySequence, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QGroupBox,
@@ -518,6 +518,7 @@ class MainWindow(QMainWindow):
             "font-size: 13px; line-height: 1.4; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); padding: 4px; }"
         )
         self.txt_scad.setFixedHeight(220)
+        self.txt_scad.textChanged.connect(lambda: self.txt_scad.setExtraSelections([]))
         self._scad_highlighter = OpenScadHighlighter(self.txt_scad.document())
         lay.addWidget(self.txt_scad)
         return w
@@ -1172,9 +1173,26 @@ class MainWindow(QMainWindow):
         # 语法校验
         ok, msg = renderer.validate(scad_path)
         if not ok:
+            import re
+            m = re.search(r", line (\d+)", msg) or re.search(r"line (\d+)", msg)
+            if m:
+                err_line = int(m.group(1))
+                block = self.txt_scad.document().findBlockByNumber(err_line - 1)
+                if block.isValid():
+                    cursor = QTextCursor(block)
+                    self.txt_scad.setTextCursor(cursor)
+                    self.txt_scad.centerCursor()
+                    sel = QTextEdit.ExtraSelection()
+                    sel.format.setBackground(QColor(239, 68, 68, 90))  # 醒目半透明红
+                    sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                    sel.cursor = cursor
+                    self.txt_scad.setExtraSelections([sel])
+                    self.log(f"⚠️ 语法错误已自动定位并高亮至第 {err_line} 行")
             QMessageBox.warning(self, "编译失败", f"OpenSCAD 语法或编译错误:\n{msg[:500]}")
             self.log(f"❌ 重新编译失败: {msg[:300]}")
             return
+        else:
+            self.txt_scad.setExtraSelections([])
 
         # 导出 3D 模型
         if self.chk_render.isChecked():
