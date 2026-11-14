@@ -421,8 +421,14 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
 <div class="toolbar">
   <button id="btn-rotate" class="active">🔄 旋转</button>
   <button id="btn-wire">🕸️ 线框</button>
+  <button id="btn-clip">✂️ 剖切</button>
   <button id="btn-reset">🎯 居中</button>
   <input type="color" id="picker-color" value="#38bdf8" title="更换模型颜色">
+</div>
+<div id="clip-panel" style="display:none; position:absolute; bottom:68px; left:50%; transform:translateX(-50%); background:rgba(15,23,42,0.92); backdrop-filter:blur(8px); padding:6px 14px; border-radius:20px; font-size:12px; gap:8px; align-items:center; border:1px solid rgba(255,255,255,0.15); box-shadow:0 8px 20px rgba(0,0,0,0.4);">
+  <span>Z 轴截面剖切:</span>
+  <input type="range" id="clip-slider" min="-50" max="50" step="0.5" value="0" style="width:140px; cursor:pointer;">
+  <span id="clip-val">0.0mm</span>
 </div>
 <div class="tip">左键旋转 | 右键平移 | 滚轮缩放</div>
 
@@ -483,6 +489,7 @@ window.addEventListener('DOMContentLoaded', () => {{
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
+  renderer.localClippingEnabled = true;
   container.appendChild(renderer.domElement);
 
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -554,6 +561,38 @@ window.addEventListener('DOMContentLoaded', () => {{
   btnWire.addEventListener('click', () => {{
     material.wireframe = !material.wireframe;
     btnWire.classList.toggle('active', material.wireframe);
+  }});
+
+  // 实时内部截面剖切 (Cross-Section Clipping Plane)
+  const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  let isClipping = false;
+  const btnClip = document.getElementById('btn-clip');
+  const clipPanel = document.getElementById('clip-panel');
+  const clipSlider = document.getElementById('clip-slider');
+  const clipVal = document.getElementById('clip-val');
+
+  clipSlider.min = (-size.y / 2).toFixed(1);
+  clipSlider.max = (size.y / 2).toFixed(1);
+  clipSlider.value = (size.y / 4).toFixed(1);
+  clipVal.textContent = `${{clipSlider.value}}mm`;
+
+  btnClip.addEventListener('click', () => {{
+    isClipping = !isClipping;
+    btnClip.classList.toggle('active', isClipping);
+    clipPanel.style.display = isClipping ? 'flex' : 'none';
+    if (isClipping) {{
+      clipPlane.constant = parseFloat(clipSlider.value);
+      material.clippingPlanes = [clipPlane];
+      material.clipShadows = true;
+    }} else {{
+      material.clippingPlanes = [];
+    }}
+  }});
+
+  clipSlider.addEventListener('input', (e) => {{
+    const v = parseFloat(e.target.value);
+    clipVal.textContent = `${{v.toFixed(1)}}mm`;
+    clipPlane.constant = v;
   }});
 
   document.getElementById('btn-reset').addEventListener('click', () => {{
