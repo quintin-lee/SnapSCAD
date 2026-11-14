@@ -95,6 +95,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   预览图        : {result.preview_png}")
         if result.viewer_html:
             print(f"   3D 网页查看器 : {result.viewer_html}")
+        doc = getattr(result, "doctor_report", None)
+        if doc:
+            print(f"   适印性自检    : {doc.summary()} | 尺寸: {doc.bounding_box[0]}x{doc.bounding_box[1]}x{doc.bounding_box[2]}mm")
+            for w in doc.warnings[:2]:
+                print(f"     ⚠️  {w}")
         if result.fix_rounds:
             print(f"   自动修正轮数  : {result.fix_rounds}")
         if result.review_rounds:

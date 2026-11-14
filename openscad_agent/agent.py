@@ -52,6 +52,8 @@ class AgentResult:
     review_rounds: int = 0
     #: 审查各轮得分演进走势 (如 [0.3, 0.7, 0.95])
     score_trajectory: list[float] = field(default_factory=list)
+    #: 3D 打印切片自检健康报告 (Printability Doctor)
+    doctor_report: Optional[Any] = None
     #: 生成的独立 HTML 3D 网页交互查看器路径
     viewer_html: Optional[str] = None
     #: 最后一次审查结论（含 match/score/issues/verdict）
@@ -234,6 +236,12 @@ class OpenscadAgent:
             if v_cand.exists():
                 viewer_html = str(v_cand)
 
+        from .doctor import check_printability
+        doc_report = check_printability(spec)
+        _log.info("[doctor] %s | 尺寸: %s mm", doc_report.summary(), doc_report.bounding_box)
+        for w in doc_report.warnings[:2]:
+            _log.warning("[doctor] ⚠️ %s", w)
+
         _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
             success=True, spec=spec, spec_path=spec_path_str,
@@ -242,6 +250,7 @@ class OpenscadAgent:
             errors=errors, fix_rounds=rounds,
             review_rounds=review_rounds, review=self.last_review,
             score_trajectory=getattr(self, "score_trajectory", []),
+            doctor_report=doc_report,
         )
 
     # ------------------------------------------------------------------

@@ -486,6 +486,11 @@ class MainWindow(QMainWindow):
             self.log("✅ 建模成功")
             if result.model_file:
                 self.log(f"3D 模型: {result.model_file}")
+            doc = getattr(result, "doctor_report", None)
+            if doc:
+                self.log(f"🩺 适印性自检: {doc.summary()} | 尺寸: {doc.bounding_box[0]}×{doc.bounding_box[1]}×{doc.bounding_box[2]}mm")
+                for w in doc.warnings[:2]:
+                    self.log(f"   ⚠️ {w}")
             # 审查闭环结论
             rv = getattr(result, "review", None)
             rr = getattr(result, "review_rounds", 0)

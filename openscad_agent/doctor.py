@@ -1,0 +1,133 @@
+"""3D 打印适印性诊断系统 (Printability Doctor)。
+
+在模型导出前自动分析规格几何特征：
+- 极细特征 / 薄壁诊断（<0.4mm 无法切片警告，<0.8mm 脆弱壁厚提醒）
+- 微小孔径预警（<1.5mm 熔融热缩闭孔提醒）
+- 细长高比结构预警（高径比 > 10 打印晃动走丝预警）
+- 打印机热床超限评估（常见 256x256x256mm 热床适配）
+- 输出结构化评估报告与优化建议，写入 OpenSCAD 源码注释并在终端/GUI提示。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .spec import normalize_size, normalize_hole_size
+
+
+@dataclass
+class PrintabilityReport:
+    """3D 打印适印性诊断报告。"""
+    printable: bool = True
+    score: int = 100
+    warnings: list[str] = field(default_factory=list)
+    tips: list[str] = field(default_factory=list)
+    bounding_box: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def summary(self) -> str:
+        status = "✅ 优良" if self.score >= 90 else ("⚠️ 需注意" if self.score >= 70 else "❌ 风险较高")
+        return f"适印性评分: {self.score}/100 ({status})"
+
+
+def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
+    """对模型规格执行全方位 3D 打印工程自检。"""
+    report = PrintabilityReport()
+    parts = spec.get("parts") or []
+    if not parts:
+        report.printable = True
+        return report
+
+    min_x, max_x = float("inf"), float("-inf")
+    min_y, max_y = float("inf"), float("-inf")
+    min_z, max_z = float("inf"), float("-inf")
+
+    has_critical_thin = False
+
+    for p in parts:
+        pid = str(p.get("id", "part"))
+        prim = p.get("primitive", "cube")
+        size = normalize_size(prim, p)
+        center = p.get("center", [0, 0, 0])
+        cx = float(center[0]) if len(center) >= 1 else 0.0
+        cy = float(center[1]) if len(center) >= 2 else 0.0
+        cz = float(center[2]) if len(center) >= 3 else 0.0
+
+        # 特征尺寸与壁厚检查
+        if prim in ("cube", "cuboid", "box"):
+            w, d, h = size[0], size[1], size[2]
+            min_dim = min(w, d, h)
+            if min_dim < 0.4:
+                report.warnings.append(f"部件 '{pid}' 存在低于 0.4mm 的超薄特征 ({min_dim:.2f}mm)，常规喷嘴切片将被忽略")
+                report.score -= 20
+                has_critical_thin = True
+            elif min_dim < 0.8:
+                report.warnings.append(f"部件 '{pid}' 特征壁厚偏薄 ({min_dim:.2f}mm)，单圈走丝强度较脆弱")
+                report.score -= 8
+            # 更新包围盒
+            min_x = min(min_x, cx - w / 2)
+            max_x = max(max_x, cx + w / 2)
+            min_y = min(min_y, cy - d / 2)
+            max_y = max(max_y, cy + d / 2)
+            min_z = min(min_z, cz)
+            max_z = max(max_z, cz + h)
+
+        elif prim in ("cylinder", "capsule"):
+            d = size[0]
+            h = size[1] if len(size) >= 2 else 10.0
+            r = d / 2.0
+            if d < 0.8:
+                report.warnings.append(f"部件 '{pid}' 直径过小 ({d:.2f}mm)，打印易折断")
+                report.score -= 15
+            elif d > 0 and h / d > 10.0:
+                report.warnings.append(f"部件 '{pid}' 高径比过大 ({h/d:.1f})，细长立柱在高速移动时易晃动拉丝")
+                report.tips.append(f"针对部件 '{pid}' 建议切片时开启外侧支撑或大底裙边 (Brim)")
+                report.score -= 5
+            # 更新包围盒
+            min_x = min(min_x, cx - r)
+            max_x = max(max_x, cx + r)
+            min_y = min(min_y, cy - r)
+            max_y = max(max_y, cy + r)
+            min_z = min(min_z, cz)
+            max_z = max(max_z, cz + h)
+
+        elif prim == "sphere":
+            r = size[0]
+            if r < 1.0:
+                report.warnings.append(f"球体 '{pid}' 半径极小 ({r:.2f}mm)")
+                report.score -= 10
+            min_x = min(min_x, cx - r)
+            max_x = max(max_x, cx + r)
+            min_y = min(min_y, cy - r)
+            max_y = max(max_y, cy + r)
+            min_z = min(min_z, cz - r)
+            max_z = max(max_z, cz + r)
+
+        # 孔洞检查
+        holes = p.get("holes") or []
+        for h_item in holes:
+            h_prim = h_item.get("primitive", "cube")
+            h_size = normalize_hole_size(h_prim, h_item)
+            if h_prim == "cylinder":
+                hole_d = h_size[0]
+                if hole_d < 1.5:
+                    report.tips.append(f"部件 '{pid}' 孔洞直径仅 {hole_d:.1f}mm，耗材热缩易偏紧，建议预留 0.2mm 孔径补偿")
+                    report.score -= 3
+
+    # 包围盒评估
+    dim_x = max(max_x - min_x, 0.0) if min_x != float("inf") else 0.0
+    dim_y = max(max_y - min_y, 0.0) if min_y != float("inf") else 0.0
+    dim_z = max(max_z - min_z, 0.0) if min_z != float("inf") else 0.0
+    report.bounding_box = (round(dim_x, 1), round(dim_y, 1), round(dim_z, 1))
+
+    max_bed_size = 256.0
+    if max(dim_x, dim_y, dim_z) > max_bed_size:
+        report.tips.append(f"模型外轮廓 ({max(dim_x, dim_y, dim_z):.1f}mm) 超出常见 256mm 热床，需对角线排布或切块打印")
+        report.score -= 5
+
+    report.score = max(report.score, 10)
+    report.printable = not has_critical_thin and report.score >= 50
+    return report
+
+
+__all__ = ["PrintabilityReport", "check_printability"]

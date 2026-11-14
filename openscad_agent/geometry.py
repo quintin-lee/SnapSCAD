@@ -14,6 +14,7 @@ from typing import Any
 
 from .core import AgentConfig
 from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole
+from .doctor import check_printability
 
 
 def _fmt(v: float) -> str:
@@ -475,11 +476,21 @@ def spec_to_scad(
         out.append(f"{final_module}();")
     out.append("")
 
-    if tips:
-        out.append("// ---------------- 3D 打印建议 ----------------")
-        for t in tips:
-            out.append(f"//   - {t}")
-        out.append("")
+    # 3D 打印适印性诊断 (Printability Doctor)
+    doc = check_printability(spec)
+    out.append("// ---------------- 3D 打印切片自检报告 (Printability Doctor) ----------------")
+    out.append(f"// {doc.summary()}")
+    out.append(f"// 包围盒尺寸: {doc.bounding_box[0]} × {doc.bounding_box[1]} × {doc.bounding_box[2]} mm")
+    if doc.warnings:
+        out.append("// 适印性风险预警:")
+        for w in doc.warnings:
+            out.append(f"//   ⚠️ {w}")
+    all_tips = (doc.tips or []) + (tips or [])
+    if all_tips:
+        out.append("// 切片与工艺建议:")
+        for t in all_tips:
+            out.append(f"//   💡 {t}")
+    out.append("")
 
     return "\n".join(out)
 
