@@ -14,6 +14,7 @@ from .spec import validate_spec, normalize_part
 from .doctor import check_printability, PrintabilityReport, generate_print_guide
 from .gallery import generate_gallery
 from .packager import package_project
+from .server import serve_assets
 
 __all__ = [
     "AgentConfig",
@@ -38,4 +39,5 @@ __all__ = [
     "generate_gallery",
     "package_project",
     "upload_to_3d_printer",
+    "serve_assets",
 ]

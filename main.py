@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--extra-system", default="", help="追加到系统提示词的额外指令")
     p.add_argument("--show-prompt", action="store_true", help="打印识别用系统提示词后退出")
     p.add_argument("--test", action="store_true", help="执行全套自动化工程质量自检与回归测试套件")
+    p.add_argument("--serve", nargs="?", const="8080", help="启动局域网 3D 资产共享 Web 服务 (可指定端口如 --serve 8080)")
     return p
 from openscad_agent.log import setup_logging
 
@@ -66,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.test:
         from test_agent import run_all_tests
         return 0 if run_all_tests() else 1
+
+    if args.serve:
+        from openscad_agent.server import serve_assets
+        port = int(args.serve) if str(args.serve).isdigit() else 8080
+        serve_assets(args.output, port=port, blocking=True)
+        return 0
 
     setup_logging(log_file="out/agent.log")
 

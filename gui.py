@@ -178,6 +178,7 @@ class MainWindow(QMainWindow):
             "btn_dxf": "📐 激光切割 DXF",
             "btn_zip": "📦 打包工程 ZIP",
             "btn_printer": "🖨️ 发送至打印机",
+            "btn_serve": "📡 局域网分享",
             "btn_open_dir": "📁 打开输出目录",
             "tab_projects": "📚 历史工程库 (单击全景回溯)",
             "tab_files": "📁 全部输出文件",
@@ -209,6 +210,7 @@ class MainWindow(QMainWindow):
             "btn_dxf": "📐 Laser Cut DXF",
             "btn_zip": "📦 Export Project ZIP",
             "btn_printer": "🖨️ Send to 3D Printer",
+            "btn_serve": "📡 LAN Share",
             "btn_open_dir": "📁 Open Output Folder",
             "tab_projects": "📚 Projects Catalog",
             "tab_files": "📁 Output Files",
@@ -615,6 +617,10 @@ class MainWindow(QMainWindow):
         self.btn_send_printer.clicked.connect(self.on_send_to_printer)
         act_bar.addWidget(self.btn_send_printer)
 
+        self.btn_serve = QPushButton("📡 局域网分享")
+        self.btn_serve.clicked.connect(self.on_serve_assets)
+        act_bar.addWidget(self.btn_serve)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -687,6 +693,7 @@ class MainWindow(QMainWindow):
         self.btn_export_dxf.setText(d["btn_dxf"])
         self.btn_pack_zip.setText(d["btn_zip"])
         self.btn_send_printer.setText(d["btn_printer"])
+        self.btn_serve.setText(d["btn_serve"])
         self.btn_open_dir.setText(d["btn_open_dir"])
         self.tabs_assets.setTabText(0, d["tab_projects"])
         self.tabs_assets.setTabText(1, d["tab_files"])
@@ -1096,7 +1103,7 @@ class MainWindow(QMainWindow):
     def on_send_to_printer(self) -> None:
         """一键将切片文件 (3MF 或 STL) 推送至局域网 Klipper (Moonraker) 或 OctoPrint 打印机。"""
         if not self._scad_path:
-            QMessageBox.information(self, "提示", "尚未生成模型文件。请先完成一次建模。")
+            QMessageBox.information(self, "提示", "尚未生成模型文件。请先完成建模。")
             return
         scad_p = Path(self._scad_path)
         # 优选 3MF 现代切片格式，次选二进制 STL
@@ -1127,6 +1134,23 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "推送未完成", f"打印机推送响应:\n{msg}")
             self.log(f"⚠️ {msg}")
+
+    def on_serve_assets(self) -> None:
+        """启动后台 Web 资产服务器并打印局域网访问地址。"""
+        out_dir = Path(self.txt_outdir.text().strip() or "out").resolve()
+        from openscad_agent.server import serve_assets
+        try:
+            local_url, lan_url, port = serve_assets(out_dir, port=8080, open_browser=True, blocking=False)
+            self.log(f"📡 局域网 3D 资产服务已在后台就绪:\n   💻 本机: {local_url}\n   📱 手机无线: {lan_url}")
+            QMessageBox.information(
+                self, "局域网 3D 资产分享已启动",
+                f"Web 服务已在后台托管 {out_dir.name}/\n\n"
+                f"💻 本机电脑: {local_url}\n"
+                f"📱 手机/平板 (同 Wi-Fi): {lan_url}\n\n"
+                f"您可直接在手机浏览器中打开该地址无线检视 3D 模型！"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "启动失败", f"资产服务启动异常: {e}")
 
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
