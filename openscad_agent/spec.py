@@ -51,6 +51,28 @@ def _sanitize_num(v: Any, default: float) -> float:
     return default
 
 
+def _sanitize_color(c: Any) -> Optional[str | list[float]]:
+    """规范化部件颜色：支持英文颜色名、十六进制 #RRGGBB、RGB/RGBA 数组。"""
+    if not c:
+        return None
+    if isinstance(c, str):
+        s = c.strip().strip("'\"")
+        if s and all(ch.isalnum() or ch in "#_-" for ch in s) and len(s) <= 32:
+            return s
+        return None
+    if isinstance(c, (list, tuple)) and len(c) >= 3:
+        try:
+            nums = [float(x) for x in c[:4]]
+            if any(x > 1.0 for x in nums):
+                nums = [min(max(x / 255.0, 0.0), 1.0) for x in nums]
+            else:
+                nums = [min(max(x, 0.0), 1.0) for x in nums]
+            return nums
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
     """把 LLM 输出的多种尺寸字段统一为生成器期望的 size 列表。
 
@@ -80,6 +102,20 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         h = _sanitize_num(part.get("height", part.get("z", 10)), 10.0)
         return [w, d, h]
     if p == "cylinder":
+        # 显式三元组 [d1, d2, h] 支持圆台/圆锥
+        if isinstance(raw, list) and len(raw) >= 3:
+            return [_sanitize_num(raw[0], 10.0), _sanitize_num(raw[1], 10.0), _sanitize_num(raw[2], 10.0)]
+        # 检查是否有圆台/圆锥参数: r1, r2, d1, d2 等
+        has_taper = any(k in part for k in ("r1", "r2", "d1", "d2", "radius1", "radius2", "diameter1", "diameter2"))
+        if has_taper:
+            r1_raw = part.get("r1", part.get("radius1"))
+            r2_raw = part.get("r2", part.get("radius2"))
+            r1 = _sanitize_num(r1_raw, 5.0) if r1_raw is not None else None
+            r2 = _sanitize_num(r2_raw, 0.0) if r2_raw is not None else None
+            d1 = _sanitize_num(part.get("d1", part.get("diameter1")), r1 * 2 if r1 is not None else 10.0)
+            d2 = _sanitize_num(part.get("d2", part.get("diameter2")), r2 * 2 if r2 is not None else 0.0)
+            h = _sanitize_num(part.get("height", 10), 10.0)
+            return [d1, d2, h]
         r = _sanitize_num(part.get("radius", 5), 5.0)
         d = _sanitize_num(part.get("diameter", r * 2), r * 2)
         h = _sanitize_num(part.get("height", 10), 10.0)
@@ -123,6 +159,9 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
     out["center"] = _as_vec3(part.get("center"), (0.0, 0.0, 0.0))
     rot = _as_vec3(part.get("rotation"), (0.0, 0.0, 0.0))
     out["rotation"] = rot
+    color = _sanitize_color(part.get("color"))
+    if color is not None:
+        out["color"] = color
     out["size"] = normalize_size(prim, part)
     holes = part.get("holes") or []
     out["holes"] = [_normalize_hole(h) for h in holes]

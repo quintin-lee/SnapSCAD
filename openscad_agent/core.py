@@ -320,12 +320,16 @@ SPEC_SCHEMA = """\
       "id": "string, 部件唯一 id（如 'body'）",
       "primitive": "cube|cylinder|sphere|polyhedron",
       // 尺寸字段（二选一，优先 size）:
-      //   cube:     size: [x, y, z]
-      //   cylinder: size: [直径, 高度]  或  radius: N, height: N
-      //   sphere:   size: [半径]       或  radius: N
+      //   cube:          size: [x, y, z]
+      //   cylinder/cone: size: [直径, 高度]  或  [底径d1, 顶径d2, 高度]
+      //                  或 radius: N, height: N 或 r1: N, r2: N, height: N (圆锥/圆台)
+      //   sphere:        size: [半径]       或  radius: N
       "size": [x, y, z],
       "radius": N,          // 圆柱/球专用（size 缺省时使用）
       "height": N,          // 圆柱专用（size 缺省时使用）
+      "r1": N,              // 圆锥/圆台底半径 (可选)
+      "r2": N,              // 圆锥/圆台顶半径 (可选，为 0 则为尖锥)
+      "color": "string|[r,g,b]", // 部件视觉颜色（如 "dimgray", "firebrick", "gold", "#e67e22"），帮助预览图区分各语义部件
       "center": [x, y, z], // 部件原点坐标（mm）
       "rotation": [rx, ry, rz], // 绕三轴角度（度，可选）
       "holes": [           // 需减去的实体（孔、凹槽），字段同上

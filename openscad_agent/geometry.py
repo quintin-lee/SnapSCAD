@@ -23,13 +23,22 @@ def _fmt(v: float) -> str:
 
 
 def _cylinder_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
-    """圆柱生成器。size = [直径, 高度]，由调用方规范化 radius/height 字段。"""
-    d, h = float(size[0]), float(size[1])
+    """圆柱/圆锥生成器。
+    size = [直径, 高度] 或 [底面直径d1, 顶面直径d2, 高度h] (圆锥/圆台)。
+    """
+    if len(size) >= 3:
+        d1, d2, h = float(size[0]), float(size[1]), float(size[2])
+    else:
+        d1 = d2 = float(size[0])
+        h = float(size[1])
     cx, cy, cz = (float(center[i]) for i in range(3))
-    r = d / 2.0
-    lines = [f"  // {note}" if note else "  // cylinder"]
-    lines.append(f"  translate([{_fmt(cx - r)}, {_fmt(cy - r)}, {_fmt(cz)}])")
-    lines.append(f"    cylinder(h = {_fmt(h)}, d = {_fmt(d)}, center = false);")
+    max_r = max(d1, d2) / 2.0
+    lines = [f"  // {note}" if note else ("  // cone/taper" if abs(d1 - d2) > 1e-6 else "  // cylinder")]
+    lines.append(f"  translate([{_fmt(cx - max_r)}, {_fmt(cy - max_r)}, {_fmt(cz)}])")
+    if abs(d1 - d2) < 1e-6:
+        lines.append(f"    cylinder(h = {_fmt(h)}, d = {_fmt(d1)}, center = false);")
+    else:
+        lines.append(f"    cylinder(h = {_fmt(h)}, d1 = {_fmt(d1)}, d2 = {_fmt(d2)}, center = false);")
     return "\n".join(lines)
 
 
@@ -162,10 +171,24 @@ def _hole_code(hole: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _color_wrapper(color: Any) -> tuple[str, str]:
+    """返回 (color_open, color_close) 供 OpenSCAD 代码包裹。若无 color 则返回 ('', '')。"""
+    if not color:
+        return "", ""
+    if isinstance(color, str):
+        c = color.strip().strip("'\"")
+        if c:
+            return f"  color(\"{c}\") {{", "  }"
+    elif isinstance(color, (list, tuple)) and len(color) >= 3:
+        vals = ", ".join(_fmt(v) for v in color[:4])
+        return f"  color([{vals}]) {{", "  }"
+    return "", ""
+
+
 def _part_module(name: str, part: dict[str, Any]) -> list[str]:
     """生成一个 part 对应的 OpenSCAD 模块定义。
 
-    rotation 绕部件自身中心（center）旋转，包裹整个部件体（含孔洞挖除）。
+    支持 color 视觉颜色包裹，rotation 绕部件自身中心旋转。
     """
     part_name = part.get("id", name)
     prim = part.get("primitive", "cube")
@@ -173,51 +196,62 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
     rotation = part.get("rotation") or [0, 0, 0]
     holes = part.get("holes") or []
     note = part.get("note", "")
+    color = part.get("color")
 
     # 规范化尺寸：兼容 size=[..]、size=标量、radius/height、cuboid/box 等多种 LLM 输出
     size = _normalize_size(prim, part)
 
     lines: list[str] = [f"module {part_name}() {{"]
 
+    c_open, c_close = _color_wrapper(color)
+    indent = "  " if c_open else ""
+    if c_open:
+        lines.append(c_open)
+
     # polyhedron 带顶点数据 → 生成真正的 polyhedron()；否则走通用 builder
     if prim == "polyhedron" and _has_polyhedron_vertices(part):
         poly_body = _polyhedron_vertices(part, center, note)
         rx, ry, rz = (float(rotation[i]) for i in range(3))
         if any(abs(v) > 1e-6 for v in (rx, ry, rz)):
-            lines.append(f"  translate([{_fmt(float(center[0]))}, {_fmt(float(center[1]))}, {_fmt(float(center[2]))}])")
-            lines.append(f"    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
+            lines.append(f"{indent}  translate([{_fmt(float(center[0]))}, {_fmt(float(center[1]))}, {_fmt(float(center[2]))}])")
+            lines.append(f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
             for l in poly_body:
-                lines.append(f"      {l}" if l.strip() else l)
+                lines.append(f"{indent}      {l}" if l.strip() else l)
         else:
-            lines += poly_body
+            for l in poly_body:
+                lines.append(f"{indent}{l}" if l.strip() else l)
+        if c_close:
+            lines.append(c_close)
         lines.append("}")
         return lines
 
     # 部件体（主体 + 孔洞）
     body: list[str] = []
     if holes:
-        body.append("  difference() {")
-        body += [f"    {l}" if l else l for l in _part_body(prim, size, center, note)]
+        body.append(f"{indent}  difference() {{")
+        body += [f"{indent}    {l}" if l else l for l in _part_body(prim, size, center, note)]
         for hole in holes:
-            body += _hole_code(hole)
-        body.append("  }")
+            body += [f"{indent}{l}" if l else l for l in _hole_code(hole)]
+        body.append(f"{indent}  }}")
     else:
-        body += [f"  {l}" if l else l for l in _part_body(prim, size, center, note)]
+        body += [f"{indent}  {l}" if l else l for l in _part_body(prim, size, center, note)]
 
     cx, cy, cz = (float(center[i]) for i in range(3))
     rx, ry, rz = (float(rotation[i]) for i in range(3))
     has_rot = any(abs(v) > 1e-6 for v in (rx, ry, rz))
 
-    lines: list[str] = [f"module {part_name}() {{"]
     if has_rot:
         # 绕部件中心旋转：translate 到中心 → rotate → 内部几何以中心为原点生成
-        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
-        lines.append(f"    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
-        lines += [f"      {l}" if l else l for l in _part_body_rel(prim, size, note)]
+        lines.append(f"{indent}  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+        lines.append(f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
+        lines += [f"{indent}      {l}" if l else l for l in _part_body_rel(prim, size, note)]
         for hole in holes:
-            lines += _hole_code_rel(hole, center)
+            lines += [f"{indent}{l}" if l else l for l in _hole_code_rel(hole, center)]
     else:
         lines += body
+
+    if c_close:
+        lines.append(c_close)
     lines.append("}")
     return lines
 
