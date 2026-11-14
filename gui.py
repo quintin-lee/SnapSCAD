@@ -164,12 +164,24 @@ class MainWindow(QMainWindow):
         self.btn_build.setMinimumHeight(40)
         self.btn_build.setStyleSheet(
             "QPushButton { background-color: #2563eb; color: white; font-weight: bold; "
-            "font-size: 14px; border-radius: 6px; }"
+            "font-size: 14px; border-radius: 6px; padding: 0 16px; }"
             "QPushButton:hover { background-color: #1d4ed8; }"
             "QPushButton:disabled { background-color: #cbd5e1; }"
         )
         self.btn_build.clicked.connect(self.on_build)
         lay.addWidget(self.btn_build)
+
+        self.btn_cancel = QPushButton("⏹ 终止")
+        self.btn_cancel.setMinimumHeight(40)
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setStyleSheet(
+            "QPushButton { background-color: #ef4444; color: white; font-weight: bold; "
+            "font-size: 14px; border-radius: 6px; padding: 0 14px; }"
+            "QPushButton:hover { background-color: #dc2626; }"
+            "QPushButton:disabled { background-color: #e2e8f0; color: #94a3b8; }"
+        )
+        self.btn_cancel.clicked.connect(self.on_cancel_build)
+        lay.addWidget(self.btn_cancel)
 
         self.progress = QProgressBar()
         self.progress.setFixedHeight(10)
@@ -207,6 +219,15 @@ class MainWindow(QMainWindow):
         self.cmb_preset.currentIndexChanged.connect(self.on_preset_selected)
         row_preset.addWidget(self.cmb_preset, stretch=1)
         mode_lay.addLayout(row_preset)
+
+        row_desc_hdr = QHBoxLayout()
+        row_desc_hdr.addWidget(QLabel("文字描述:"))
+        row_desc_hdr.addStretch(1)
+        self.btn_enhance = QPushButton("🪄 追加工程约束")
+        self.btn_enhance.setStyleSheet("font-size: 11px; padding: 2px 8px; color: #2563eb;")
+        self.btn_enhance.clicked.connect(self.on_enhance_prompt)
+        row_desc_hdr.addWidget(self.btn_enhance)
+        mode_lay.addLayout(row_desc_hdr)
 
         self.txt_desc = QTextEdit()
         self.txt_desc.setPlaceholderText("或在此输入文字描述 / 从上方选择预设范例…")
@@ -615,14 +636,42 @@ class MainWindow(QMainWindow):
         self._clear_compare()
 
         self.btn_build.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
         self.lbl_status.setText("运行中…")
         self.progress.setRange(0, 0)  # 不定进度
         self.log("启动后台任务…")
         self._worker.start()
         self._save_settings()
 
+    def on_cancel_build(self) -> None:
+        """安全中止正在执行的后台建模任务。"""
+        if self._worker and self._worker.isRunning():
+            self.log("⚠️ 收到终止指令，正在中止后台任务…")
+            self._worker.terminate()
+            self._worker.wait(800)
+            self._worker = None
+            self.btn_build.setEnabled(True)
+            self.btn_cancel.setEnabled(False)
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.lbl_status.setText("已中止")
+            self.log("🛑 建模任务已由用户手动中止。")
+
+    def on_enhance_prompt(self) -> None:
+        """为当前描述智能追加工业级公差、接地与壁厚约束。"""
+        cur = self.txt_desc.toPlainText().strip()
+        if not cur:
+            cur = "一个工业级零部件结构"
+        enhancement = "，要求结构底部平整平贴 Z=0 打印底板，壁厚均匀（建议2.0mm），配合孔与活动特征预留 0.3mm 间隙公差，关键受力转角倒圆角过渡。"
+        if "Z=0" not in cur and "壁厚" not in cur:
+            self.txt_desc.setPlainText(cur + enhancement)
+            self.log("🪄 已智能追加工程级壁厚、配合公差与 Z=0 接地约束！")
+        else:
+            self.log("提示: 当前描述已包含专业工程约束。")
+
     def on_done(self, result) -> None:
         self.btn_build.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.lbl_status.setText("完成" if result.success else "失败")
@@ -669,6 +718,7 @@ class MainWindow(QMainWindow):
 
     def on_error(self, msg: str) -> None:
         self.btn_build.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
         self.progress.setRange(0, 100)
         self.lbl_status.setText("错误")
         self.log(f"❌ 错误: {msg}")
