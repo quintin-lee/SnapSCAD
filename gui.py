@@ -205,22 +205,22 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_toolbar())
 
         # 中间三栏
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # 左：输入区（图片选择 / 文字描述 / 补充说明 / 参数设置）
         left = self._build_input_panel()
-        splitter.addWidget(left)
+        self.main_splitter.addWidget(left)
 
         # 中：规格 + 流程
         mid = self._build_spec_panel()
-        splitter.addWidget(mid)
+        self.main_splitter.addWidget(mid)
 
         # 右：预览
         right = self._build_preview_panel()
-        splitter.addWidget(right)
+        self.main_splitter.addWidget(right)
 
-        splitter.setSizes([320, 480, 420])
-        root.addWidget(splitter, stretch=1)
+        self.main_splitter.setSizes([320, 480, 420])
+        root.addWidget(self.main_splitter, stretch=1)
 
         # 底部日志
         root.addWidget(self._build_log_panel())
@@ -1275,6 +1275,15 @@ class MainWindow(QMainWindow):
             self.chk_render.setChecked(s.value("chk_render", True).lower() != "false")
         if s.contains("chk_review"):
             self.chk_review.setChecked(s.value("chk_review", True).lower() != "false")
+        if s.contains("window_geometry"):
+            self.restoreGeometry(s.value("window_geometry"))
+        if s.contains("splitter_sizes") and hasattr(self, "main_splitter"):
+            try:
+                sizes = [int(x) for x in s.value("splitter_sizes")]
+                if len(sizes) == 3 and all(x > 0 for x in sizes):
+                    self.main_splitter.setSizes(sizes)
+            except Exception:
+                pass
 
     def _save_settings(self) -> None:
         s = self._settings
@@ -1289,6 +1298,9 @@ class MainWindow(QMainWindow):
         s.setValue("review_rounds", str(self.spn_review_rounds.value()))
         s.setValue("chk_render", str(self.chk_render.isChecked()))
         s.setValue("chk_review", str(self.chk_review.isChecked()))
+        if hasattr(self, "main_splitter"):
+            s.setValue("splitter_sizes", self.main_splitter.sizes())
+        s.setValue("window_geometry", self.saveGeometry())
         s.sync()
 
     def closeEvent(self, event) -> None:  # noqa: N802
