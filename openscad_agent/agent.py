@@ -258,8 +258,8 @@ class OpenscadAgent:
         from .doctor import check_printability, generate_print_guide
         doc_report = check_printability(spec)
         _log.info(
-            "[doctor] %s | 尺寸: %s mm | 估算体积: %.1f cm³ (约%.1fg, 耗时%.1f小时)",
-            doc_report.summary(), doc_report.bounding_box, doc_report.volume_cm3, doc_report.weight_g, doc_report.print_time_hours
+            "[doctor] %s | 尺寸: %s mm | 估算体积: %.1f cm³ (约%.1fg, 成本:约¥%.2f/耗时:%.1f小时)",
+            doc_report.summary(), doc_report.bounding_box, doc_report.volume_cm3, doc_report.weight_g, doc_report.cost_cny, doc_report.print_time_hours
         )
         for w in doc_report.warnings[:2]:
             _log.warning("[doctor] ⚠️ %s", w)

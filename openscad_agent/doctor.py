@@ -29,6 +29,8 @@ class PrintabilityReport:
     volume_cm3: float = 0.0
     weight_g: float = 0.0
     print_time_hours: float = 0.0
+    cost_cny: float = 0.0
+    cost_usd: float = 0.0
 
     def summary(self) -> str:
         status = "✅ 优良" if self.score >= 90 else ("⚠️ 需注意" if self.score >= 70 else "❌ 风险较高")
@@ -165,10 +167,15 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
     est_weight = round(vol_cm3 * 1.24 * 0.38, 1)
     # 典型走丝速度 60mm/s 挤出速率约 12 cm³/小时
     est_hours = round(max((vol_cm3 * 0.38) / 12.0, 0.2), 1)
+    # 耗材成本核算：以工业标准 PLA 均价 ¥80/kg 与 $20/kg 测算
+    cost_cny = round((est_weight / 1000.0) * 80.0, 2)
+    cost_usd = round((est_weight / 1000.0) * 20.0, 2)
 
     report.volume_cm3 = vol_cm3
     report.weight_g = est_weight
     report.print_time_hours = est_hours
+    report.cost_cny = cost_cny
+    report.cost_usd = cost_usd
 
     report.score = max(report.score, 10)
     report.printable = not has_critical_thin and report.score >= 50
@@ -203,6 +210,7 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
 | **预估实体体积** | `{report.volume_cm3:.1f} cm³` | 净体积几何积分 |
 | **预估耗材克重** | `约 {report.weight_g:.1f} g` | 以标准 PLA 耗材 / 15% 填充率测算 |
 | **预估打印耗时** | `约 {report.print_time_hours:.1f} 小时` | 典型 60mm/s 走丝速度 |
+| **预估耗材成本** | `约 ¥{report.cost_cny:.2f} 元 (${report.cost_usd:.2f})` | 工业级 PLA/PETG 市场均价折算 |
 
 ---
 

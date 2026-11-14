@@ -891,7 +891,7 @@ class MainWindow(QMainWindow):
                 self.log(f"3D 模型: {result.model_file}")
             doc = getattr(result, "doctor_report", None)
             if doc:
-                self.log(f"🩺 适印性自检: {doc.summary()} | 尺寸: {doc.bounding_box[0]}×{doc.bounding_box[1]}×{doc.bounding_box[2]}mm")
+                self.log(f"🩺 适印性自检: {doc.summary()} | 尺寸: {doc.bounding_box[0]}×{doc.bounding_box[1]}×{doc.bounding_box[2]}mm | 预估耗材: {doc.weight_g}g (约¥{doc.cost_cny})")
                 for w in doc.warnings[:2]:
                     self.log(f"   ⚠️ {w}")
             # 审查闭环结论
