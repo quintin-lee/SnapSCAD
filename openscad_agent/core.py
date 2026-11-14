@@ -465,6 +465,51 @@ SPEC_SCHEMA = """\
 """
 
 
+def upload_to_3d_printer(
+    file_path: str | Path,
+    server_url: str = "http://localhost:7125",
+    api_key: str = "",
+    timeout: int = 10,
+) -> tuple[bool, str]:
+    """通过 HTTP API 将模型/切片文件一键推送至局域网 3D 打印机 (Klipper/Moonraker 或 OctoPrint)。"""
+    import requests
+    p = Path(file_path).resolve()
+    if not p.exists():
+        return False, f"待上传文件不存在: {p}"
+
+    base = server_url.rstrip("/")
+    if not base.startswith("http://") and not base.startswith("https://"):
+        base = f"http://{base}"
+
+    headers = {}
+    if api_key:
+        headers["X-Api-Key"] = api_key
+
+    # 1. 尝试 Klipper (Moonraker) 端点
+    url_moonraker = f"{base}/server/files/upload"
+    try:
+        with open(p, "rb") as f:
+            resp = requests.post(url_moonraker, files={"file": (p.name, f)}, headers=headers, timeout=timeout)
+        if resp.status_code in (200, 201):
+            _log.info("[printer] 已推送至 Klipper 打印机: %s", p.name)
+            return True, f"已成功推送至 Klipper (Moonraker): {p.name}"
+    except Exception:
+        pass
+
+    # 2. 尝试 OctoPrint 端点
+    url_octo = f"{base}/api/files/local"
+    try:
+        with open(p, "rb") as f:
+            resp = requests.post(url_octo, files={"file": (p.name, f)}, headers=headers, timeout=timeout)
+        if resp.status_code in (200, 201):
+            _log.info("[printer] 已推送至 OctoPrint 打印机: %s", p.name)
+            return True, f"已成功推送至 OctoPrint: {p.name}"
+    except Exception as e:
+        return False, f"无法连接局域网打印机 ({base}): {e}"
+
+    return False, f"打印机服务返回状态码 {resp.status_code}: {resp.text[:150]}"
+
+
 def spec_to_json(spec: dict[str, Any]) -> str:
     return json.dumps(spec, ensure_ascii=False, indent=2)
 

@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QSplitter, QScrollArea, QTreeWidget, QTreeWidgetItem,
     QPlainTextEdit, QMessageBox, QProgressBar, QFrame, QSizePolicy,
     QListWidget, QListWidgetItem, QSpinBox, QDoubleSpinBox, QTabWidget,
+    QInputDialog,
 )
 
 from openscad_agent import AgentConfig, OpenscadAgent, OpenscadRenderer
@@ -522,6 +523,10 @@ class MainWindow(QMainWindow):
         self.btn_pack_zip.clicked.connect(self.on_package_zip)
         act_bar.addWidget(self.btn_pack_zip)
 
+        self.btn_send_printer = QPushButton("🖨️ 发送至打印机")
+        self.btn_send_printer.clicked.connect(self.on_send_to_printer)
+        act_bar.addWidget(self.btn_send_printer)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -927,6 +932,41 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "打包成功", f"全套工程资产已打包为:\n{zip_p}\n包含 3D模型、2D图纸、源码、网页查看器与工艺指导书。")
         except Exception as e:
             QMessageBox.warning(self, "打包失败", f"工程打包异常: {e}")
+
+    def on_send_to_printer(self) -> None:
+        """一键将切片文件 (3MF 或 STL) 推送至局域网 Klipper (Moonraker) 或 OctoPrint 打印机。"""
+        if not self._scad_path:
+            QMessageBox.information(self, "提示", "尚未生成模型文件。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        # 优选 3MF 现代切片格式，次选二进制 STL
+        target_f = scad_p.with_suffix(".3mf")
+        if not target_f.exists():
+            target_f = scad_p.with_suffix(".stl")
+        if not target_f.exists():
+            QMessageBox.information(self, "提示", "未找到可供打印的 3MF 或 STL 模型文件。")
+            return
+
+        from openscad_agent.core import upload_to_3d_printer
+        saved_url = self._settings.value("printer_url", "http://mainsail.local:7125")
+        url, ok = QInputDialog.getText(
+            self, "推送至 3D 打印机",
+            f"请输入局域网 3D 打印机主机地址 (Moonraker / OctoPrint):\n将上传: {target_f.name}",
+            QLineEdit.EchoMode.Normal, saved_url
+        )
+        if not ok or not url.strip():
+            return
+
+        url = url.strip()
+        self._settings.setValue("printer_url", url)
+        self.log(f"正在向打印机推送文件: {url} <- {target_f.name}…")
+        success, msg = upload_to_3d_printer(target_f, server_url=url, timeout=6)
+        if success:
+            QMessageBox.information(self, "推送成功", msg)
+            self.log(f"✅ {msg}")
+        else:
+            QMessageBox.warning(self, "推送未完成", f"打印机推送响应:\n{msg}")
+            self.log(f"⚠️ {msg}")
 
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
