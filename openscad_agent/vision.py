@@ -18,6 +18,8 @@ from typing import Any, Optional
 import requests
 
 from .core import AgentConfig, SPEC_SCHEMA
+from .log import get_logger as _log_module
+_log = _log_module()
 
 VISION_PROMPT = f"""\
 你是一位资深 3D CAD 工程师 + 逆向工程专家。用户会给你一张产品/零件/物体的照片，
@@ -101,7 +103,7 @@ class AgnesVision:
             # 限流/服务端暂不可用等已由重试处理，不应降级为纯文本
             # (否则丢失图片信息，且纯文本同样会限流)。
             if "http 400" in msg or "http 422" in msg or "http 401" in msg:
-                print(f"[agnes] 多模态图片消息被拒绝({e})，降级为纯文本请求")
+                _log.warning("[agnes] 多模态图片消息被拒绝(%s)，降级为纯文本请求", e)
                 fallback = (
                     f"图片文件: {image_path.name}。"
                     + (f"用户补充说明: {user_hint}" if user_hint else "")
@@ -161,8 +163,8 @@ class AgnesVision:
 
             base_wait = 6 if code == 429 else 10
             wait = min(base_wait * (2 ** (attempt - 1)), 60)
-            print(f"[agnes] HTTP {code} (尝试 {attempt}/{max_attempts}): {detail}")
-            print(f"[agnes] {wait}s 后重试…")
+            _log.warning("[agnes] HTTP %s (尝试 %d/%d): %s", code, attempt, max_attempts, detail)
+            _log.info("[agnes] %ss 后重试…", wait)
             import time
             time.sleep(wait)
 
@@ -247,7 +249,7 @@ class AgnesVision:
             return self._extract_review(raw)
         except Exception as e:  # noqa: BLE001
             # 审查环节失败（限流/网络/解析）→ 保守放行，避免阻断建模
-            print(f"[review] 审查请求失败，保守放行: {e}")
+            _log.warning("[review] 审查请求失败，保守放行: %s", e)
             return {"match": True, "score": -1.0, "issues": [],
                     "verdict": f"审查跳过: {e}", "skipped": True}
 
@@ -333,8 +335,8 @@ class AgnesVision:
             # 429 限流 / 500 模型暂不可用 → 指数退避（上限 60s）
             base_wait = 6 if code == 429 else 10
             wait = min(base_wait * (2 ** (attempt - 1)), 60)
-            print(f"[agnes] HTTP {code} (尝试 {attempt}/{max_attempts}): {detail}")
-            print(f"[agnes] {wait}s 后重试…")
+            _log.warning("[agnes] HTTP %s (尝试 %d/%d): %s", code, attempt, max_attempts, detail)
+            _log.info("[agnes] %ss 后重试…", wait)
             import time
             time.sleep(wait)
 
@@ -344,7 +346,7 @@ class AgnesVision:
     def _backoff(attempt: int, reason: str) -> None:
         import time
         wait = min(5 * (2 ** (attempt - 1)), 30)
-        print(f"[agnes] {reason} (尝试 {attempt})，{wait}s 后重试…")
+        _log.warning("[agnes] %s (尝试 %d)，%ss 后重试…", reason, attempt, wait)
         time.sleep(wait)
 
     @staticmethod

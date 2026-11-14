@@ -20,6 +20,8 @@ from typing import Any, Optional
 from .core import AgentConfig, OpenscadRenderer, preprocess_image
 from .geometry import spec_to_scad, write_spec_and_scad
 from .vision import AgnesVision, SpecParseError
+from .log import get_logger as _log_module
+_log = _log_module()
 
 
 def _build_fix_messages(spec: dict, compile_err: str, hint: str, image_name: str) -> tuple[str, str]:
@@ -128,7 +130,7 @@ class OpenscadAgent:
             # 4. 带错误信息重试（最多 3 轮）
             for i in range(self.max_fix_rounds):
                 rounds += 1
-                print(f"[agent] 编译失败 (round {i + 1}/{self.max_fix_rounds})，请求 LLM 修正…")
+                _log.warning("[agent] 编译失败 (round %d/%d)，请求 LLM 修正…", i + 1, self.max_fix_rounds)
                 fixed_spec = self._ask_fix(spec, msg, hint, image_name)
                 if fixed_spec is None:
                     errors.append(f"修正请求失败 (round {i + 1}): LLM 限流或不可用")
@@ -145,7 +147,7 @@ class OpenscadAgent:
             if not ok:
                 ok2, msg2 = self.renderer.validate(scad_path)
                 if ok2:
-                    print(f"[agent] spec 本身可编译，跳过修复直接渲染")
+                    _log.info("[agent] spec 本身可编译，跳过修复直接渲染")
                     ok = True
                     msg = msg2
                 else:
@@ -191,7 +193,7 @@ class OpenscadAgent:
             except RuntimeError as e:
                 errors.append(f"审查后重新渲染失败: {e}")
 
-        print(f"[agent] 完成: {safe} (fix_rounds={rounds}, review_rounds={review_rounds}, errors={len(errors)})")
+        _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
             success=True, spec=spec, spec_path=spec_path_str,
             scad_path=str(scad_path), model_file=model_file,
@@ -242,15 +244,15 @@ class OpenscadAgent:
             extra_views = [p for p in extra_views if p != main_png]
 
         for i in range(1, max_review + 1):
-            print(f"[review] 审查渲染图 (round {i}/{max_review}, {len(extra_views) + 1} 视角) …")
+            _log.info("[review] 审查渲染图 (round %d/%d, %d 视角) …", i, max_review, len(extra_views) + 1)
             verdict = self.vision.review_preview(
                 original_image, main_png, spec, user_hint=hint, extra_views=extra_views or None
             )
             if verdict.get("skipped"):
-                print(f"[review] {verdict.get('verdict')}")
+                _log.info("[review] %s", verdict.get('verdict'))
                 break
             cur_score = float(verdict.get("score", 0.0) or 0.0)
-            print(f"[review] match={verdict.get('match')} score={cur_score} | {verdict.get('verdict')}")
+            _log.info("[review] match=%s score=%s | %s", verdict.get('match'), cur_score, verdict.get('verdict'))
             if verdict.get("match"):
                 # 符合预期，成功收敛
                 best_score = cur_score
@@ -265,13 +267,13 @@ class OpenscadAgent:
             # 不符合 → 应用 LLM 建议的 spec_patch 并重新生成+渲染
             patch = (verdict.get("suggested_fix") or {}).get("spec_patch")
             if not patch:
-                print(f"[review] LLM 判为不符合但未给出 spec_patch，停止: {verdict.get('issues')}")
+                _log.warning("[review] LLM 判为不符合但未给出 spec_patch，停止: %s", verdict.get('issues'))
                 self.last_review = verdict
                 break
             try:
                 new_spec = self._merge_spec_patch(spec, patch)
             except Exception as e:  # noqa: BLE001
-                print(f"[review] 应用 spec_patch 失败: {e}，停止")
+                _log.warning("[review] 应用 spec_patch 失败: %s，停止", e)
                 self.last_review = verdict
                 break
 
@@ -279,7 +281,7 @@ class OpenscadAgent:
             old_cnt = len(spec.get("parts", []))
             new_cnt = len(new_spec.get("parts", []))
             if new_cnt < old_cnt:
-                print(f"[review] LLM 修正减少部件数 ({old_cnt}->{new_cnt})，视为回归，拒绝并停止")
+                _log.warning("[review] LLM 修正减少部件数 (%d->%d)，视为回归，拒绝并停止", old_cnt, new_cnt)
                 spec.clear()
                 spec.update(best_spec)
                 self.last_review = verdict
@@ -292,7 +294,7 @@ class OpenscadAgent:
             new_scad = Path(scad_path_str)
             ok, cerr = self.renderer.validate(new_scad)
             if not ok:
-                print(f"[review] 修正后 spec 编译失败: {cerr[:300]}，停止")
+                _log.warning("[review] 修正后 spec 编译失败: %s，停止", cerr[:300])
                 self.last_review = verdict
                 break
             # 重渲染主预览 + 多视角
@@ -301,15 +303,15 @@ class OpenscadAgent:
                 main_png = new_main
                 extra_views = new_extra if self.enable_multi_view else []
             except RuntimeError as e:
-                print(f"[review] 重渲染失败: {e}，停止")
+                _log.warning("[review] 重渲染失败: %s，停止", e)
                 self.last_review = verdict
                 break
-            print(f"[review] 已修正规格并重渲染 (round {i})")
+            _log.info("[review] 已修正规格并重渲染 (round %d)", i)
 
         # 若循环结束仍 match=false（未收敛），回退到迄今得分最高的 spec，
         # 避免把模型越改越糟（LLM 可能简化而非补全）。
         if best_spec is not spec and best_score > -1.0:
-            print(f"[review] 未收敛，回退到得分最高的 spec (score={best_score})")
+            _log.info("[review] 未收敛，回退到得分最高的 spec (score=%s)", best_score)
             spec.clear()
             spec.update(best_spec)
 
@@ -351,5 +353,5 @@ class OpenscadAgent:
             ])
             return result
         except Exception as e:  # noqa: BLE001
-            print(f"[agent] 修正请求异常: {e}，保留原 spec")
+            _log.warning("[agent] 修正请求异常: %s，保留原 spec", e)
             return spec

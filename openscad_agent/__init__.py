@@ -9,6 +9,7 @@ from .core import AgentConfig, OpenscadRenderer, preprocess_image, SPEC_SCHEMA
 from .agent import AgentResult, OpenscadAgent
 from .vision import AgnesVision, SpecParseError
 from .geometry import spec_to_scad, write_spec_and_scad
+from .log import setup_logging, get_logger
 
 __all__ = [
     "AgentConfig",
@@ -21,4 +22,6 @@ __all__ = [
     "write_spec_and_scad",
     "preprocess_image",
     "SPEC_SCHEMA",
+    "setup_logging",
+    "get_logger",
 ]

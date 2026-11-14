@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .log import get_logger as _log_module
+_log = _log_module()
+
 # ---------------------------------------------------------------------------
 # 通用工具
 # ---------------------------------------------------------------------------
@@ -141,7 +144,7 @@ class OpenscadRenderer:
         code, out, err = run_cmd(cmd)
         if code != 0:
             raise RuntimeError(f"OpenSCAD 导出失败 ({scad_path.name} -> {out_path.name}):\n{err or out}")
-        print(f"[render] 已导出 3D 模型: {out_path}")
+        _log.info("[render] 已导出 3D 模型: %s", out_path)
         return out_path
 
     def render_preview(self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600)) -> Path:
@@ -184,7 +187,7 @@ class OpenscadRenderer:
             code, out, err = run_cmd(base)
         if code != 0:
             raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}, view={view}):\n{err or out}")
-        print(f"[render] 已生成预览图({view}): {out_png}")
+        _log.info("[render] 已生成预览图(%s): %s", view, out_png)
         return out_png
 
     def render_multi_view(
@@ -202,7 +205,7 @@ class OpenscadRenderer:
             try:
                 paths.append(self.render_preview_view(scad_path, target, size=size, view=v))
             except RuntimeError as e:
-                print(f"[render] 视角 {v} 渲染失败，跳过: {str(e)[:120]}")
+                _log.info("[render] 视角 %s 渲染失败，跳过: %s", v, str(e)[:120])
         return paths
 
     def export_model_or_validate(self, scad_path: Path, out_stl: Optional[Path]) -> tuple[bool, str, Optional[Path]]:
@@ -277,7 +280,7 @@ def preprocess_image(src: Path, dst: Path, max_side: int = 2048) -> Path:
     code, out, err = run_cmd(cmd)
     if code != 0:
         raise RuntimeError(f"图片预处理失败 {src} -> {dst}: {err.strip()[:300]}")
-    print(f"[preprocess] 图片已预处理: {dst.name} (max_side={max_side})")
+    _log.info("[preprocess] 图片已预处理: %s (max_side=%d)", dst.name, max_side)
     return dst
 
 

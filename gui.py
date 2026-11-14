@@ -598,6 +598,10 @@ def main() -> int:
     os.environ.setdefault("QT_IM_MODULE", "fcitx5")
     os.environ.setdefault("QT_PLUGIN_PATH", "/usr/lib/qt6/plugins")
 
+    # 日志落盘（控制台 + out/agent.log）；GUI 面板另行订阅信号，不依赖 logging
+    from openscad_agent.log import setup_logging
+    setup_logging(log_file="out/agent.log")
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     win = MainWindow()

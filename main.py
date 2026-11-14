@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--extra-system", default="", help="追加到系统提示词的额外指令")
     p.add_argument("--show-prompt", action="store_true", help="打印识别用系统提示词后退出")
     return p
+from openscad_agent.log import setup_logging
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.show_prompt:
         print(SPEC_SCHEMA)
         return 0
+
+    setup_logging(log_file="out/agent.log")
 
     config = AgentConfig(
         output_dir=args.output,

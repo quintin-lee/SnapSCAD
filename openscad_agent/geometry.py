@@ -390,6 +390,8 @@ def write_spec_and_scad(
     scad_src = spec_to_scad(spec, config)
     scad_path = out_dir / f"{safe}.scad"
     scad_path.write_text(scad_src, encoding="utf-8")
-    print(f"[gen] 规格已写入: {spec_path}")
-    print(f"[gen] OpenSCAD 源码已写入: {scad_path}")
+    from openscad_agent.log import get_logger
+    _log = get_logger()
+    _log.info("[gen] 规格已写入: %s", spec_path)
+    _log.info("[gen] OpenSCAD 源码已写入: %s", scad_path)
     return str(spec_path), str(scad_path), safe
