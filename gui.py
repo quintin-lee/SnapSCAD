@@ -496,6 +496,7 @@ class MainWindow(QMainWindow):
         tree.setHeaderLabels(["字段", "值"])
         tree.setColumnWidth(0, 160)
         self.spec_tree = tree
+        self.spec_tree.itemClicked.connect(self.on_spec_tree_clicked)
         lay.addWidget(tree, stretch=1)
 
         scad_bar = QHBoxLayout()
@@ -678,6 +679,38 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(d["idle"])
         self._settings.setValue("language", lang)
         self.log(f"Language switched to: {self.cmb_lang.currentText()}")
+
+    def on_spec_tree_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        """单击规格树节点：自动定位并高亮源码中对应的 module 定义。"""
+        target_id = ""
+        if item.text(0) == "id":
+            target_id = item.text(1).strip()
+        else:
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child.text(0) == "id":
+                    target_id = child.text(1).strip()
+                    break
+
+        if not target_id:
+            candidate = item.text(1).strip() or item.text(0).strip()
+            if candidate and f"module {candidate}()" in self.txt_scad.toPlainText():
+                target_id = candidate
+
+        if not target_id:
+            return
+
+        doc = self.txt_scad.document()
+        find_cursor = doc.find(f"module {target_id}()")
+        if not find_cursor.isNull():
+            self.txt_scad.setTextCursor(find_cursor)
+            self.txt_scad.centerCursor()
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setBackground(QColor(59, 130, 246, 90))  # 亮蓝高亮
+            sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            sel.cursor = find_cursor
+            self.txt_scad.setExtraSelections([sel])
+            self.log(f"🔍 规格树联动定位: module {target_id}()")
 
     def on_pick_image(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
