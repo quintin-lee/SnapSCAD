@@ -422,6 +422,7 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
   <button id="btn-rotate" class="active">🔄 旋转</button>
   <button id="btn-wire">🕸️ 线框</button>
   <button id="btn-clip">✂️ 剖切</button>
+  <button id="btn-ruler">📏 尺寸</button>
   <button id="btn-reset">🎯 居中</button>
   <input type="color" id="picker-color" value="#38bdf8" title="更换模型颜色">
 </div>
@@ -593,6 +594,19 @@ window.addEventListener('DOMContentLoaded', () => {{
     const v = parseFloat(e.target.value);
     clipVal.textContent = `${{v.toFixed(1)}}mm`;
     clipPlane.constant = v;
+  }});
+
+  // 三维空间尺寸标定盒 (3D Dimension Bounding Box)
+  const boxHelper = new THREE.Box3Helper(new THREE.Box3().setFromObject(mesh), 0x38bdf8);
+  boxHelper.visible = false;
+  scene.add(boxHelper);
+
+  let showRuler = false;
+  const btnRuler = document.getElementById('btn-ruler');
+  btnRuler.addEventListener('click', () => {{
+    showRuler = !showRuler;
+    boxHelper.visible = showRuler;
+    btnRuler.classList.toggle('active', showRuler);
   }});
 
   document.getElementById('btn-reset').addEventListener('click', () => {{
