@@ -22,7 +22,7 @@ from openscad_agent.packager import package_project
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="OpenSCAD Agent: 图片/文字 -> OpenSCAD 3D 模型",
+        description="SnapSCAD: Visual Reverse Engineering & AI CAD Agent (照片/草图/文字 -> 参数化 OpenSCAD 3D 模型)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     src = p.add_mutually_exclusive_group(required=False)

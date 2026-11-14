@@ -1,7 +1,9 @@
-# OpenSCAD Agent
+# SnapSCAD
 
-图片 → 3D 模型 自动化 Agent：给定一张产品/零件照片，自动识别几何结构，
-生成 OpenSCAD (`.scad`) 源码并渲染导出可 3D 打印的 STL/OBJ/3MF 模型。
+> **Turn photos into parametric OpenSCAD models in a snap.**  
+> 随手一拍，即刻代码造物。
+
+**SnapSCAD** 是一个全自动多模态 3D CAD 逆向工程 Agent：给定单张或多张产品/零件照片或自然语言描述，自动反求几何结构，生成可参数化微调的 OpenSCAD (`.scad`) 源码，并自动化完成 CGAL 语法编译自愈、多视角审查闭环、适印性体检、双格式 3D 打印切片模型 (STL/3MF)、激光切割 2D 轮廓 (DXF/SVG)、便携式 3D 网页查看器与工程资产打包。
 
 ## 架构
 

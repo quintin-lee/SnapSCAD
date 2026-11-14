@@ -1,7 +1,7 @@
-"""OpenSCAD Agent 包：图片识别 → OpenSCAD 3D 模型。
+"""SnapSCAD: Visual Reverse Engineering & AI CAD Agent (照片/草图/文字 -> 参数化 OpenSCAD 3D 模型)。
 
-公开 API：
-  OpenscadAgent(config).build_from_image(image, hint)
+公开 API:
+  OpenscadAgent(config).build_from_image(images, hint)
   OpenscadAgent(config).build_from_description(text)
 """
 

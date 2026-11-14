@@ -150,12 +150,12 @@ class BuildWorker(QThread):
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    SETTINGS_ORG = "openscad_agent"
-    SETTINGS_APP = "openscad_agent"
+    SETTINGS_ORG = "SnapSCAD"
+    SETTINGS_APP = "SnapSCAD"
 
     I18N = {
         "zh": {
-            "title": "OpenSCAD Agent - 图片→3D模型",
+            "title": "SnapSCAD - 照片→参数化 3D CAD 模型 Agent",
             "btn_build": "▶ 开始建模",
             "btn_cancel": "⏹ 终止",
             "idle": "空闲",
@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("OpenSCAD Agent - 图片→3D模型")
+        self.setWindowTitle("SnapSCAD - 照片→参数化 3D CAD 模型 Agent")
         self.resize(1200, 800)
         self._worker: Optional[BuildWorker] = None
         self._scad_path: Optional[str] = None
