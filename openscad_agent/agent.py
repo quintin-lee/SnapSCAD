@@ -24,12 +24,29 @@ from .log import get_logger as _log_module
 _log = _log_module()
 
 
+def _analyze_compile_error(compile_err: str) -> str:
+    """分析 OpenSCAD 编译器报错日志，生成针对性修正建议。"""
+    err_low = compile_err.lower()
+    hints: list[str] = []
+    if "polyhedron" in err_low:
+        hints.append("💡 多面体 (polyhedron) 报错：请仔细检查 faces 数组顶点索引是否从 0 开始且闭合，或将该复杂部件直接简化为 cube/cylinder/capsule 降级实现。")
+    if "difference" in err_low or "hole" in err_low:
+        hints.append("💡 挖除差集 (difference/holes) 报错：请确保 holes 内部的 primitive 和尺寸合法，且与父部件空间相交。")
+    if "syntax error" in err_low or "parser error" in err_low:
+        hints.append("💡 语法解析报错：请严格检查各部件尺寸与坐标数值是否为纯数字，确保属性名符合 SPEC_SCHEMA 规范。")
+    if not hints:
+        hints.append("💡 编译未通过：请简化可能有拓扑冲突的复杂部件，优先采用标准 CSG 基础原语保证可编译性。")
+    return "\n".join(hints)
+
+
 def _build_fix_messages(spec: dict, compile_err: str, hint: str, image_name: str) -> tuple[str, str]:
+    diag_hint = _analyze_compile_error(compile_err)
     sys = (
         "你是 OpenSCAD 专家。用户给出了一份模型规格 JSON，但由它生成的 OpenSCAD "
         f"源码编译失败。请修正规格 JSON，使其能顺利编译。只输出修正后的完整 JSON 对象。\n"
         f"原始规格:\n{json.dumps(spec, ensure_ascii=False, indent=2)}\n\n"
-        f"编译错误:\n{compile_err}\n"
+        f"编译器报错信息:\n{compile_err}\n\n"
+        f"诊断与修复建议:\n{diag_hint}\n"
     )
     user = (
         f"请输出修正后的完整规格 JSON（图片: {image_name}"
@@ -166,8 +183,8 @@ class OpenscadAgent:
             # 4. 带错误信息重试（最多 3 轮）
             for i in range(self.max_fix_rounds):
                 rounds += 1
-                _log.warning("[agent] 编译失败 (round %d/%d)，请求 LLM 修正…", i + 1, self.max_fix_rounds)
-                fixed_spec = self._ask_fix(spec, msg, hint, image_name)
+                _log.warning("[agent] 编译失败 (round %d/%d)，阶梯温控请求 LLM 修正…", i + 1, self.max_fix_rounds)
+                fixed_spec = self._ask_fix(spec, msg, hint, image_name, round_index=i + 1)
                 if fixed_spec is None:
                     errors.append(f"修正请求失败 (round {i + 1}): LLM 限流或不可用")
                     break
@@ -415,16 +432,19 @@ class OpenscadAgent:
 
     # ------------------------------------------------------------------
     def _ask_fix(
-        self, spec: dict[str, Any], compile_err: str, hint: str, image_name: str
+        self, spec: dict[str, Any], compile_err: str, hint: str, image_name: str, round_index: int = 1
     ) -> Optional[dict[str, Any]]:
-        """把 OpenSCAD 编译错误回传给 LLM，请求修正后的规格。
+        """把 OpenSCAD 编译错误回传给 LLM，请求修正后的规格（带阶梯温控与错误定向引导）。
 
         若 LLM 因限流/不可用无法修正，返回原 spec（避免把已知正确的 spec
         覆盖为 LLM 重新解析的无效数据）。
         """
+        from dataclasses import replace
+        step_temp = min(self.config.temperature + (round_index - 1) * 0.2, 0.7)
         sys, user = _build_fix_messages(spec, compile_err, hint, image_name)
         try:
-            vision = AgnesVision(self.config)
+            fix_config = replace(self.config, temperature=step_temp)
+            vision = AgnesVision(fix_config)
             result = vision._chat([
                 {"role": "system", "content": sys},
                 {"role": "user", "content": user},
