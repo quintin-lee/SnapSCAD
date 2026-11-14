@@ -81,6 +81,8 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self._worker: Optional[BuildWorker] = None
         self._scad_path: Optional[str] = None
+        self._last_image: Optional[str] = None
+        self._last_desc: str = ""
         self._settings = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
         self._build_ui()
         self._load_settings()
@@ -284,19 +286,30 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(4, 4, 4, 4)
 
-        lay.addWidget(QLabel("<b>3D 预览</b>", wordWrap=True))
-        self.lbl_preview = QLabel("（尚未渲染）")
+        lay.addWidget(QLabel("<b>原图 vs 预览对比</b>", wordWrap=True))
+        # 原图 | 预览图 并排
+        cmp_split = QSplitter(Qt.Orientation.Horizontal)
+
+        self.lbl_origin = QLabel("（原图）")
+        self.lbl_origin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_origin.setMinimumSize(200, 260)
+        self.lbl_origin.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
+        self.lbl_origin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        cmp_split.addWidget(self.lbl_origin)
+
+        self.lbl_preview = QLabel("（预览）")
         self.lbl_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_preview.setMinimumHeight(300)
-        self.lbl_preview.setStyleSheet(
-            "QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }"
-        )
+        self.lbl_preview.setMinimumSize(200, 260)
+        self.lbl_preview.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
         self.lbl_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        lay.addWidget(self.lbl_preview, stretch=1)
+        cmp_split.addWidget(self.lbl_preview)
+
+        cmp_split.setSizes([260, 260])
+        lay.addWidget(cmp_split, stretch=2)
 
         lay.addWidget(QLabel("<b>输出文件</b>", wordWrap=True))
         self.lst_files = QListWidget()
-        lay.addWidget(self.lst_files)
+        lay.addWidget(self.lst_files, stretch=1)
         return w
 
     def _build_log_panel(self) -> QWidget:
@@ -368,6 +381,11 @@ class MainWindow(QMainWindow):
         self._worker.done_signal.connect(self.on_done)
         self._worker.error_signal.connect(self.on_error)
 
+        # 保存本次原图供对比展示，并清空旧预览
+        self._last_image = image
+        self._last_desc = desc
+        self._clear_compare()
+
         self.btn_build.setEnabled(False)
         self.lbl_status.setText("运行中…")
         self.progress.setRange(0, 0)  # 不定进度
@@ -393,7 +411,7 @@ class MainWindow(QMainWindow):
         if result.model_file:
             self._refresh_file_list(Path(result.model_file).parent)
         if result.preview_png and Path(result.preview_png).exists():
-            self._show_preview(result.preview_png)
+            self._show_preview(result.preview_png, origin_image=self._last_image)
 
         if result.success:
             self.log("✅ 建模成功")
@@ -452,7 +470,8 @@ class MainWindow(QMainWindow):
             return "true" if v else "false"
         return str(v)
 
-    def _show_preview(self, png_path: str) -> None:
+    def _show_preview(self, png_path: str, origin_image: Optional[str] = None) -> None:
+        """预览图 + 可选原图并排对比。"""
         pm = QPixmap(png_path)
         if not pm.isNull():
             scaled = pm.scaled(
@@ -463,6 +482,29 @@ class MainWindow(QMainWindow):
             self.lbl_preview.setPixmap(scaled)
             self.lbl_preview.setStyleSheet("QLabel { border: 2px solid #2563eb; border-radius: 8px; }")
         self.log(f"预览图已加载: {png_path}")
+        # 原图对比
+        if origin_image and Path(origin_image).exists():
+            opm = QPixmap(origin_image)
+            if not opm.isNull():
+                oscaled = opm.scaled(
+                    self.lbl_origin.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.lbl_origin.setPixmap(oscaled)
+                self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+                self.log(f"原图已加载: {origin_image}")
+        else:
+            self.lbl_origin.clear()
+            self.lbl_origin.setText("（无原图）")
+
+    def _clear_compare(self) -> None:
+        self.lbl_origin.clear()
+        self.lbl_origin.setText("（原图）")
+        self.lbl_origin.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
+        self.lbl_preview.clear()
+        self.lbl_preview.setText("（预览）")
+        self.lbl_preview.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
 
     def _refresh_file_list(self, out_dir: Path) -> None:
         self.lst_files.clear()
