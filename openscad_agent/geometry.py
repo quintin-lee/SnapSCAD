@@ -296,7 +296,52 @@ def _normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
     return _normalize_size(prim, hole)
 
 
-def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None, fn: int = 0) -> str:
+def _estimate_part_min_z(part: dict[str, Any]) -> float:
+    """计算单个部件在世界坐标下的 Z 轴最低点（用于自动贴合 Z=0 底板）。"""
+    prim = part.get("primitive", "cube")
+    center = part.get("center", [0, 0, 0])
+    cz = float(center[2]) if len(center) >= 3 else 0.0
+    size = _normalize_size(prim, part)
+
+    rot = part.get("rotation") or [0, 0, 0]
+    rx = float(rot[0]) if len(rot) >= 1 else 0.0
+    ry = float(rot[1]) if len(rot) >= 2 else 0.0
+    has_tilt = abs(rx) > 1e-3 or abs(ry) > 1e-3
+
+    if prim in ("cube", "cuboid", "box"):
+        z_len = float(size[2]) if len(size) >= 3 else 10.0
+        if has_tilt:
+            return cz - z_len / 2.0
+        return cz
+    elif prim == "cylinder":
+        h = float(size[-1]) if size else 10.0
+        if has_tilt:
+            return cz - h / 2.0
+        return cz
+    elif prim == "sphere":
+        r = float(size[0]) if size else 5.0
+        return cz - r
+    elif prim == "polyhedron":
+        pts = part.get("points") or part.get("vertices")
+        if isinstance(pts, list) and pts:
+            try:
+                min_pt_z = min(float(p[2]) for p in pts if len(p) >= 3)
+                max_abs = max((abs(float(c)) for p in pts for c in p), default=0.0)
+                if max_abs <= 2.0:
+                    return cz + min_pt_z
+                return min_pt_z
+            except (ValueError, TypeError):
+                pass
+        return cz
+    return cz
+
+
+def spec_to_scad(
+    spec: dict[str, Any],
+    config: AgentConfig | None = None,
+    fn: int = 0,
+    ground_z: bool = True,
+) -> str:
     """规格 dict → 完整 OpenSCAD 源码字符串。
 
     fn: 圆柱/球体分段精度 ($fn)；0 表示不注入（使用 OpenSCAD 默认）。
@@ -322,11 +367,23 @@ def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None, fn: in
     out.append(f"// ============================================================")
     out.append("")
 
-    # 自定义参数声明（OpenSCAD 2021.01 不支持顶层 let，改用注释 + 宏）
+    # 自定义参数声明（支持 OpenSCAD Customizer 参数控件）
     if params:
-        out.append("// ---------------- 参数 ----------------")
+        out.append("// ---------------- 参数 (OpenSCAD Customizer) ----------------")
+        out.append("/* [Parameters] */")
         for k, v in params.items():
-            out.append(f"// param {k} = {json.dumps(v)}")
+            safe_k = "".join(c if c.isalnum() or c == "_" else "_" for c in str(k))
+            if not safe_k or safe_k[0].isdigit():
+                safe_k = f"p_{safe_k}"
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out.append(f"{safe_k} = {_fmt(float(v))};")
+            elif isinstance(v, bool):
+                out.append(f"{safe_k} = {'true' if v else 'false'};")
+            elif isinstance(v, str):
+                out.append(f'{safe_k} = "{v}";')
+            elif isinstance(v, (list, tuple)):
+                vals = ", ".join(_fmt(float(x)) if isinstance(x, (int, float)) else str(x) for x in v)
+                out.append(f"{safe_k} = [{vals}];")
         out.append("")
 
     # 各部件模块
@@ -373,8 +430,17 @@ def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None, fn: in
     else:
         final_module = safe_name
 
-    out.append(f"// 顶层入口")
-    out.append(f"{final_module}();")
+    # 自动接地贴合计算 (Z=0)
+    all_min_z = min((_estimate_part_min_z(p) for p in parts), default=0.0) if ground_z else 0.0
+
+    out.append("// ---------------- 顶层入口 ----------------")
+    if ground_z and abs(all_min_z) > 1e-4:
+        shift_z = -all_min_z
+        out.append(f"// 自动接地贴合: 整体平移使底部平贴 Z=0 打印底板 (最低点偏移 {_fmt(all_min_z)}mm)")
+        out.append(f"translate([0, 0, {_fmt(shift_z)}])")
+        out.append(f"  {final_module}();")
+    else:
+        out.append(f"{final_module}();")
     out.append("")
 
     if tips:
@@ -412,7 +478,12 @@ def write_spec_and_scad(
     spec_path = out_dir / f"{safe}_spec.json"
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    scad_src = spec_to_scad(spec, config, fn=config.fn_value() if config else 0)
+    ground_z = getattr(config, "ground_z", True) if config else True
+    scad_src = spec_to_scad(
+        spec, config,
+        fn=config.fn_value() if config else 0,
+        ground_z=ground_z,
+    )
     scad_path = out_dir / f"{safe}.scad"
     scad_path.write_text(scad_src, encoding="utf-8")
     _log.info("[gen] 规格已写入: %s", spec_path)

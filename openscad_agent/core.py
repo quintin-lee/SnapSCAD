@@ -83,6 +83,8 @@ class AgentConfig:
     api_timeout: int = 120
     #: 额外透传给 LLM 的系统提示补充
     extra_system: str = ""
+    #: 是否自动平移使模型底部贴合 Z=0 打印底板
+    ground_z: bool = True
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
