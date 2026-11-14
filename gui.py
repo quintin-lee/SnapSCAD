@@ -615,7 +615,7 @@ class MainWindow(QMainWindow):
         self.log(f"❌ 错误: {msg}")
 
     def on_switch_view(self, view_name: str) -> None:
-        """切换预览视角显示。"""
+        """切换预览视角显示（已渲染则秒切，未预渲染则即时生成）。"""
         if not self._current_preview_png:
             self.log("提示: 尚未渲染预览图")
             return
@@ -634,7 +634,26 @@ class MainWindow(QMainWindow):
                 self._show_preview(str(c), origin_image=self._last_image)
                 self.log(f"已切换预览视角: {view_name} -> {c.name}")
                 return
-        self.log(f"提示: 未找到 {view_name} 视角图（可能未渲染多视角）")
+
+        # 若未预渲染多视角，根据当前源码即时按需渲染该视角 (约0.2秒完成)
+        if self._scad_path and Path(self._scad_path).exists():
+            target_view_png = p.with_name(f"{p.stem}_v_{view_name}.png")
+            try:
+                self.log(f"正在即时渲染 {view_name} 视角图…")
+                config = AgentConfig(
+                    output_dir=str(p.parent),
+                    render_precision=self.cmb_precision.currentText(),
+                )
+                renderer = OpenscadRenderer(config)
+                renderer.render_preview_view(Path(self._scad_path), target_view_png, size=(600, 450), view=view_name)
+                self._show_preview(str(target_view_png), origin_image=self._last_image)
+                self.log(f"✅ 即时渲染视角成功: {target_view_png.name}")
+                self._refresh_file_list(p.parent)
+                return
+            except Exception as e:
+                self.log(f"即时渲染视角异常: {e}")
+
+        self.log(f"提示: 未找到 {view_name} 视角图")
 
     def on_open_in_openscad(self) -> None:
         """后台拉起 OpenSCAD 检视当前 .scad 源码。"""
@@ -787,6 +806,12 @@ class MainWindow(QMainWindow):
             self._current_preview_png = str(preview_png)
             self._show_preview(str(preview_png), origin_image=self._last_image)
             self.log(f"✅ 重新渲染预览图成功: {preview_png.name}")
+            # 同步渲染多视角 (top/front/iso)，确保视角切换按钮即刻可用
+            renderer.render_multi_view(
+                scad_path, preview_png.with_name(f"{scad_path.stem}_preview_v"),
+                views=OpenscadRenderer.VIEWS,
+                size=(500, 400),
+            )
         except Exception as e:
             self.log(f"渲染预览图异常: {e}")
 
