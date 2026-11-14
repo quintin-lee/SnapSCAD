@@ -171,6 +171,27 @@ def test_offline_gateway():
     assert cfg_loc.require_api_key() == "ollama-local"
 
 
+def test_blueprint_and_explode():
+    """测试 9: 机械爆炸图与四视图工业蓝图拼版合成"""
+    cfg = AgentConfig(output_dir="out_test")
+    r = OpenscadRenderer(cfg)
+    scad = Path("out_test/test_geom_all.scad")
+    bp = Path("out_test/test_agent_bp.png")
+    exp = Path("out_test/test_agent_exp.png")
+    r.render_blueprint(scad, bp)
+    r.render_exploded_view(scad, exp, explode_factor=1.2)
+    assert bp.exists() and bp.stat().st_size > 0
+    assert exp.exists() and exp.stat().st_size > 0
+
+
+def test_lan_server_and_capture():
+    """测试 10: 局域网 Web 资产共享服务与多端 IP 解析"""
+    from openscad_agent.server import serve_assets, get_local_lan_ip
+    loc, lan, port = serve_assets("out_test", port=8996, open_browser=False, blocking=False)
+    assert "8996" in loc
+    assert get_local_lan_ip() is not None
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -186,6 +207,8 @@ def run_all_tests() -> bool:
         ("独立 HTML 3D 查看器与全景展厅画廊", test_viewer_and_gallery),
         ("All-in-One 全套工程资产 ZIP 打包", test_packager),
         ("本地离线端点识别与免 Key 认证网关", test_offline_gateway),
+        ("机械爆炸图与四视图工业蓝图拼版合成", test_blueprint_and_explode),
+        ("局域网 Web 资产共享服务与多端 IP 解析", test_lan_server_and_capture),
     ]
 
     all_ok = True
@@ -198,7 +221,7 @@ def run_all_tests() -> bool:
     total_time = time.perf_counter() - t_start
     print("=" * 60)
     if all_ok:
-        print(f"🎉 全部 8 项核心测试用例 100% 通过！(总耗时: {total_time:.2f}s)")
+        print(f"🎉 全部 10 项核心测试用例 100% 通过！(总耗时: {total_time:.2f}s)")
     else:
         print(f"⚠️ 测试未全部通过，请检查上方失败项。(总耗时: {total_time:.2f}s)")
     print("=" * 60 + "\n")
