@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings, QUrl
-from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices
+from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QGroupBox,
@@ -77,6 +77,33 @@ class BuildWorker(QThread):
 class MainWindow(QMainWindow):
     SETTINGS_ORG = "openscad_agent"
     SETTINGS_APP = "openscad_agent"
+
+    PRESETS = {
+        "机械: 带沉孔圆形法兰 (Flange Mount)": (
+            "一个工业级圆形法兰安装座，包含外径60mm厚度8mm的底盘，4个均布的M4沉孔，中央有一个直径25mm高20mm的凸台，中央贯穿12mm的轴孔。",
+            "底盘直径60mm，4个沉孔分布在R=22mm的圆周上，同心度要求高"
+        ),
+        "机械: 阶梯双联齿轮 (Step Gear)": (
+            "一个阶梯式双联圆柱齿轮，大齿轮外径50mm厚度10mm，小齿轮外径30mm厚度15mm，中央带有直径8mm贯穿轴孔。",
+            "大齿轮与小齿轮同轴相连，轴孔贯穿整体"
+        ),
+        "数码: 树莓派保护壳 (Enclosure Case)": (
+            "一个电子开发板外壳下盖，外尺寸90x65x25mm，壁厚2mm，四个角带有M2.5安装柱，侧面有USB接口开口与电源线槽开口。",
+            "四角安装孔距为58x49mm，壁厚均匀，内腔倒角"
+        ),
+        "文创: 极简咖啡杯 (Coffee Mug)": (
+            "一个现代极简主义流线型马克杯，杯身呈上宽下窄的微锥形（底部直径70mm，口部直径85mm，高度100mm），壁厚3mm，侧面带有一个符合人体工学的手柄。",
+            "内腔掏空厚度3mm，手柄使用胶囊体平滑连接在杯身外侧"
+        ),
+        "生活: 桌面斜角手机支架 (Phone Stand)": (
+            "一个倾斜60度的桌面手机支架，底座尺寸80x70x6mm，倾斜支撑背板高100mm，前部带有高15mm的防滑托钩，背板中央开有用于充电线的理线槽。",
+            "整体一体成型，底部平整贴合桌面，重心稳固"
+        ),
+        "建筑: 东方六角古亭 (Hexagonal Pavilion)": (
+            "一个传统中式六角亭子，由六边形底座平台、六根立柱构成的开敞空间，以及顶部的六角攒尖式飞檐斜坡屋顶组合而成。",
+            "各立柱对称分布在半径35mm的圆周上，屋顶高25mm呈六角锥形"
+        ),
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -161,14 +188,27 @@ class MainWindow(QMainWindow):
         mode_box = QGroupBox("输入源")
         mode_lay = QVBoxLayout(mode_box)
         self.image_path = QLineEdit()
-        self.image_path.setPlaceholderText("选择图片…")
-        btn_img = QPushButton("选择图片")
+        self.image_path.setPlaceholderText("选择或拖入图片（支持多选）…")
+        row_img_btns = QHBoxLayout()
+        btn_img = QPushButton("📁 选择图片 (多选)")
         btn_img.clicked.connect(self.on_pick_image)
+        btn_clip = QPushButton("📋 剪贴板粘贴截图")
+        btn_clip.clicked.connect(self.on_paste_clipboard)
+        row_img_btns.addWidget(btn_img)
+        row_img_btns.addWidget(btn_clip)
         mode_lay.addWidget(self.image_path)
-        mode_lay.addWidget(btn_img)
+        mode_lay.addLayout(row_img_btns)
+
+        row_preset = QHBoxLayout()
+        row_preset.addWidget(QLabel("预设范例:"))
+        self.cmb_preset = QComboBox()
+        self.cmb_preset.addItems(["选择预设范例…"] + list(self.PRESETS.keys()))
+        self.cmb_preset.currentIndexChanged.connect(self.on_preset_selected)
+        row_preset.addWidget(self.cmb_preset, stretch=1)
+        mode_lay.addLayout(row_preset)
 
         self.txt_desc = QTextEdit()
-        self.txt_desc.setPlaceholderText("或输入文字描述（无图片场景）")
+        self.txt_desc.setPlaceholderText("或在此输入文字描述 / 从上方选择预设范例…")
         self.txt_desc.setFixedHeight(80)
         mode_lay.addWidget(self.txt_desc)
 
@@ -401,6 +441,67 @@ class MainWindow(QMainWindow):
                 )
                 self.lbl_origin.setPixmap(scaled)
                 self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+
+    def on_preset_selected(self, index: int) -> None:
+        """从预设下拉框载入经典建模范例描述。"""
+        title = self.cmb_preset.currentText()
+        if title in self.PRESETS:
+            desc, hint = self.PRESETS[title]
+            self.txt_desc.setPlainText(desc)
+            self.txt_hint.setText(hint)
+            self.log(f"已载入预设范例: {title}")
+
+    def on_paste_clipboard(self) -> None:
+        """从系统剪贴板获取截图并载入。"""
+        cb = QApplication.clipboard()
+        img = cb.image()
+        if img.isNull():
+            text = cb.text().strip()
+            if text and Path(text).exists() and Path(text).suffix.lower() in (
+                ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"
+            ):
+                self.image_path.setText(text)
+                self._last_image = text
+                pm = QPixmap(text)
+                if not pm.isNull():
+                    scaled = pm.scaled(
+                        self.lbl_origin.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    self.lbl_origin.setPixmap(scaled)
+                    self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+                self.log(f"已从剪贴板载入图片路径: {Path(text).name}")
+                return
+            QMessageBox.information(self, "提示", "剪贴板中未找到图片数据。\n可先按 PrintScreen / 截图工具截图后再次点击粘贴。")
+            return
+
+        outdir = Path(self.txt_outdir.text().strip() or "out") / "_prep"
+        outdir.mkdir(parents=True, exist_ok=True)
+        clip_path = outdir / "clipboard_screenshot.png"
+        img.save(str(clip_path), "PNG")
+
+        self.image_path.setText(str(clip_path))
+        self._last_image = str(clip_path)
+        self.log(f"📋 已从剪贴板载入截图: {clip_path.name} ({img.width()}×{img.height()}px)")
+
+        pm = QPixmap.fromImage(img)
+        scaled = pm.scaled(
+            self.lbl_origin.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.lbl_origin.setPixmap(scaled)
+        self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        """快捷键支持：在主窗口非输入区域按 Ctrl+V 触发剪贴板截图粘贴。"""
+        if event.matches(QKeySequence.StandardKey.Paste):
+            focus = QApplication.focusWidget()
+            if not isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                self.on_paste_clipboard()
+                return
+        super().keyPressEvent(event)
 
     def on_build(self) -> None:
         raw_imgs = [p.strip() for p in self.image_path.text().split(";") if p.strip()]
