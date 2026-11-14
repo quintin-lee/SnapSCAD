@@ -68,36 +68,58 @@ class OpenscadAgent:
         self.last_review: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------
-    def build_from_image(self, image: str | Path, hint: str = "", review: bool = True) -> AgentResult:
-        """主入口：图片识别建模。review=True 时开启渲染图审查闭环。"""
-        image = Path(image).expanduser()
-        if not image.exists():
-            return AgentResult(success=False, errors=[f"图片不存在: {image}"])
+    def build_from_image(
+        self,
+        image: str | Path | list[str | Path],
+        hint: str = "",
+        review: bool = True,
+    ) -> AgentResult:
+        """主入口：图片识别建模。支持单张图片或多张多角度图片联合建模。
 
-        # 1. 预处理
+        若传入多张图片列表，Agnes 视觉模型将交叉比对各视角，消除深度歧义。
+        """
+        raw_images = image if isinstance(image, (list, tuple)) else [image]
+        images = [Path(p).expanduser() for p in raw_images]
+        missing = [p for p in images if not p.exists()]
+        if missing:
+            return AgentResult(success=False, errors=[f"图片不存在: {', '.join(str(m) for m in missing)}"])
+
+        # 1. 预处理所有输入图片
+        prep_dir = Path(self.config.output_dir) / "_prep"
+        prep_dir.mkdir(parents=True, exist_ok=True)
+        prep_paths: list[Path] = []
         try:
-            prep_dir = Path(self.config.output_dir) / "_prep"
-            prep_dir.mkdir(parents=True, exist_ok=True)
-            prep_path = prep_dir / f"{image.stem}_prep.png"
-            preprocess_image(image, prep_path, max_side=self.config.image_max_side)
+            for idx, img in enumerate(images):
+                target = prep_dir / f"{img.stem}_prep_{idx}.png"
+                preprocess_image(img, target, max_side=self.config.image_max_side)
+                prep_paths.append(target)
         except Exception as e:  # noqa: BLE001
+            for p in prep_paths:
+                _rm_quiet(p)
+            _rm_empty_dir(prep_dir)
             return AgentResult(success=False, errors=[f"图片预处理失败: {e}"])
 
-        # 2. 识别
+        # 2. 识别（多图联合输入）
         try:
-            spec = self.vision.recognize(prep_path, user_hint=hint)
+            spec = self.vision.recognize(prep_paths, user_hint=hint)
         except (SpecParseError, RuntimeError) as e:
-            _rm_quiet(prep_path)
-            _rm_empty_dir(prep_path.parent)
+            for p in prep_paths:
+                _rm_quiet(p)
+            _rm_empty_dir(prep_dir)
             return AgentResult(success=False, errors=[f"识别/解析失败: {e}"])
 
+        primary_prep = prep_paths[0]
+        tag = images[0].stem
+        image_label = ", ".join(i.name for i in images)
         result = self._finalize(
-            spec, tag=image.stem, render=True, hint=hint, image_name=image.name,
-            review=review, original_image=prep_path,
+            spec, tag=tag, render=True, hint=hint, image_name=image_label,
+            review=review, original_image=primary_prep,
         )
-        # 识别完成后删除临时预处理图 (避免 out/_prep 反复累积)
-        _rm_quiet(prep_path)
-        _rm_empty_dir(prep_path.parent)
+
+        # 识别与建模完成后删除临时预处理图 (避免 out/_prep 反复累积)
+        for p in prep_paths:
+            _rm_quiet(p)
+        _rm_empty_dir(prep_dir)
         return result
 
     def build_from_description(self, description: str) -> AgentResult:

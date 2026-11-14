@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--image", "-i", help="输入图片路径 (jpg/png/...)")
+    src.add_argument("--image", "-i", nargs="+", help="输入图片路径 (支持传入多张多角度照片, 如 -i f.jpg s.jpg)")
     src.add_argument("--describe", "-d", help="文字描述, 无图片场景")
 
     p.add_argument("--hint", default="", help="对图片的补充说明, 帮助 LLM 理解物体")
@@ -70,7 +70,14 @@ def main(argv: list[str] | None = None) -> int:
     agent = OpenscadAgent(config)
     agent.enable_multi_view = not args.no_multi_view
     if args.image:
-        result = agent.build_from_image(args.image, hint=args.hint, review=not args.no_review)
+        images: list[str] = []
+        for item in args.image:
+            for piece in str(item).split(","):
+                piece = piece.strip()
+                if piece:
+                    images.append(piece)
+        target_imgs = images if len(images) > 1 else images[0]
+        result = agent.build_from_image(target_imgs, hint=args.hint, review=not args.no_review)
     else:
         result = agent.build_from_description(args.describe)
 

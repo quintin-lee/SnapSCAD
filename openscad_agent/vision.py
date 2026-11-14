@@ -38,6 +38,32 @@ VISION_PROMPT = f"""\
 3. 对于无法用简单原语精确表达的曲面特征，用 polyhedron 近似或退化为
    圆柱/球近似，并在 part.note 中说明近似方式。
 4. 若图片模糊或无法判断，请给出最合理的假设并全部记录在 description 与 print_tips 中。
+5. 参考逆向分解范例（示范接地对齐、同心圆孔与语义着色）：
+{{
+  "name": "flange_mount",
+  "description": "带沉孔的圆形法兰安装座",
+  "units": "mm",
+  "params": {{"flange_dia": 60, "boss_dia": 30, "hole_dia": 10}},
+  "parts": [
+    {{
+      "id": "base_flange",
+      "primitive": "cylinder",
+      "size": [60, 6],
+      "center": [0, 0, 0],
+      "color": "dimgray",
+      "holes": [{{"primitive": "cylinder", "size": [10, 6], "center": [0, 0, 0]}}]
+    }},
+    {{
+      "id": "center_boss",
+      "primitive": "cylinder",
+      "size": [30, 20],
+      "center": [0, 0, 6],
+      "color": "silver",
+      "holes": [{{"primitive": "cylinder", "size": [10, 20], "center": [0, 0, 6]}}]
+    }}
+  ],
+  "assembly": {{"union_parts": ["base_flange", "center_boss"]}}
+}}
 """
 
 
@@ -76,19 +102,25 @@ class AgnesVision:
         ]
         return self._chat(messages)
 
-    def recognize(self, image_path: Path, user_hint: str = "") -> dict[str, Any]:
-        """图片识别：先尝试带图多模态消息；若接口拒绝则降级为纯文本请求
-        （附带对图片文件名的描述），保证流程不中断。
+    def recognize(self, image_path: Path | list[Path] | str | list[str], user_hint: str = "") -> dict[str, Any]:
+        """图片识别：支持单张或多张多角度图片联合建模。
 
-        注意：429/5xx 已由 _chat 自动重试；只有 400/401/422 类
-        "消息格式不被接受"才降级为纯文本。
+        若提供多张不同视角照片，消息中包含所有图片的 base64 data URL，
+        供多模态模型联合比对各视角，消除单视角深度与遮挡盲区。
+        若接口拒绝多模态格式，则降级为纯文本请求。
         """
+        paths = [Path(p) for p in (image_path if isinstance(image_path, (list, tuple)) else [image_path])]
         system = VISION_PROMPT + self.config.extra_system
-        data_url = self._image_data_url(image_path)
+
         multimodal: list[dict[str, Any]] = [
-            {"type": "text", "text": "请分析这张图片并输出 OpenSCAD 模型规格 JSON。"},
-            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": "请仔细分析以下提供的图片（多角度参考），综合交叉比对输出 OpenSCAD 模型规格 JSON。"},
         ]
+        for idx, p in enumerate(paths):
+            data_url = self._image_data_url(p)
+            label = f"[参考视角 {idx + 1}: {p.name}]" if len(paths) > 1 else "参考图片"
+            multimodal.append({"type": "text", "text": label})
+            multimodal.append({"type": "image_url", "image_url": {"url": data_url}})
+
         if user_hint:
             multimodal.insert(0, {"type": "text", "text": f"用户补充说明: {user_hint}"})
 
@@ -99,14 +131,12 @@ class AgnesVision:
             ])
         except RuntimeError as e:
             msg = str(e).lower()
-            # 仅当明确是图片消息格式不被接受时才降级；
-            # 限流/服务端暂不可用等已由重试处理，不应降级为纯文本
-            # (否则丢失图片信息，且纯文本同样会限流)。
             if "http 400" in msg or "http 422" in msg or "http 401" in msg:
+                names = ", ".join(p.name for p in paths)
                 _log.warning("[agnes] 多模态图片消息被拒绝(%s)，降级为纯文本请求", e)
                 fallback = (
-                    f"图片文件: {image_path.name}。"
-                    + (f"用户补充说明: {user_hint}" if user_hint else "")
+                    f"参考图片: {names}。"
+                    + (f" 用户补充说明: {user_hint}" if user_hint else "")
                     + " 请基于图片文件名与补充说明给出最合理的 OpenSCAD 模型规格 JSON。"
                 )
                 return self._chat([
