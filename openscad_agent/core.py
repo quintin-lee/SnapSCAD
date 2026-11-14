@@ -269,6 +269,24 @@ class OpenscadRenderer:
                 _log.info("[render] 视角 %s 渲染失败，跳过: %s", v, str(e)[:120])
         return paths
 
+    def render_exploded_view(
+        self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600), explode_factor: float = 1.2
+    ) -> Path:
+        """渲染机械爆炸图分解预览（将 explode 参数设为 >0 展开各内部零件）。"""
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        cmd = self._base_cmd() + [
+            "-D", f"explode={explode_factor}",
+            "--autocenter", "--viewall",
+            f"--imgsize={size[0]},{size[1]}",
+            *self._preview_arg(),
+            "-o", str(out_png), str(scad_path),
+        ]
+        code, out, err = run_cmd(cmd)
+        if code != 0:
+            raise RuntimeError(f"OpenSCAD 渲染爆炸图失败: {err or out}")
+        _log.info("[render] 已生成机械爆炸图分解视图: %s", out_png)
+        return out_png
+
     def export_model_or_validate(self, scad_path: Path, out_stl: Optional[Path]) -> tuple[bool, str, Optional[Path]]:
         """导出模型与校验合二为一，避免对同一 .scad 重复 CSG 求值。
 

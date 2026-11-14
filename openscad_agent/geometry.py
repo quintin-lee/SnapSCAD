@@ -548,12 +548,41 @@ def spec_to_scad(
     difference_from = assembly.get("difference_from")
     out.append(f"// assembly: {assembly.get('description', 'union of parts')}")
 
-    # 顶层: union 所有部件
+    # 计算各部件几何中心作为装配体展开基准 (Exploded View Vector)
+    part_map = {str(p.get("id", "")): p for p in parts}
+    centers = [p.get("center", [0, 0, 0]) for p in parts]
+    if centers:
+        avg_cx = sum(float(c[0]) if len(c) >= 1 else 0.0 for c in centers) / len(centers)
+        avg_cy = sum(float(c[1]) if len(c) >= 2 else 0.0 for c in centers) / len(centers)
+        avg_cz = sum(float(c[2]) if len(c) >= 3 else 0.0 for c in centers) / len(centers)
+    else:
+        avg_cx, avg_cy, avg_cz = 0.0, 0.0, 0.0
+
+    out.append("/* [Assembly Explode] */")
+    out.append("// 爆炸图分解间距比例 (0 为闭合装配状态，大于0向外展开内部零件)")
+    out.append("explode = 0.0; // [0:0.1:3]")
+    out.append("")
+
+    # 顶层: union 所有部件 (支持爆炸图展开)
     out.append(f"module {safe_name}() {{")
     out.append("  union() {")
-    for pid in union_ids:
+    for idx, pid in enumerate(union_ids):
         pid_safe = str(pid)
-        out.append(f"    {pid_safe}();")
+        p_obj = part_map.get(pid_safe)
+        if p_obj and len(union_ids) > 1:
+            p_center = p_obj.get("center", [0, 0, 0])
+            pcx = float(p_center[0]) if len(p_center) >= 1 else 0.0
+            pcy = float(p_center[1]) if len(p_center) >= 2 else 0.0
+            pcz = float(p_center[2]) if len(p_center) >= 3 else 0.0
+            dx = pcx - avg_cx
+            dy = pcy - avg_cy
+            dz = pcz - avg_cz
+            if abs(dx) < 1e-3 and abs(dy) < 1e-3 and abs(dz) < 1e-3:
+                dz = (idx - (len(union_ids) - 1) / 2.0) * 20.0
+            out.append(f"    translate(explode * [{_fmt(dx)}, {_fmt(dy)}, {_fmt(dz)}])")
+            out.append(f"      {pid_safe}();")
+        else:
+            out.append(f"    {pid_safe}();")
     out.append("  }")
     out.append("}")
     out.append("")

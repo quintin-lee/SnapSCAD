@@ -466,7 +466,8 @@ class MainWindow(QMainWindow):
         self.btn_view_top = QPushButton("俯视")
         self.btn_view_front = QPushButton("正视")
         self.btn_view_iso = QPushButton("等轴测")
-        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso):
+        self.btn_view_explode = QPushButton("💥 爆炸图")
+        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso, self.btn_view_explode):
             btn.setFixedHeight(26)
             view_bar.addWidget(btn)
         view_bar.addStretch(1)
@@ -476,6 +477,7 @@ class MainWindow(QMainWindow):
         self.btn_view_top.clicked.connect(lambda: self.on_switch_view("top"))
         self.btn_view_front.clicked.connect(lambda: self.on_switch_view("front"))
         self.btn_view_iso.clicked.connect(lambda: self.on_switch_view("iso"))
+        self.btn_view_explode.clicked.connect(lambda: self.on_switch_view("explode"))
 
         # 原图 | 预览图 并排
         cmp_split = QSplitter(Qt.Orientation.Horizontal)
@@ -814,6 +816,8 @@ class MainWindow(QMainWindow):
         candidates = []
         if view_name == "perspective":
             candidates = [p, p.with_name(f"{p.stem}_v_perspective.png")]
+        elif view_name == "explode":
+            candidates = [p.with_name(f"{p.stem}_v_explode.png"), p.with_name(f"{p.stem}_explode.png")]
         else:
             candidates = [
                 p.with_name(f"{p.stem}_v_{view_name}.png"),
@@ -835,7 +839,10 @@ class MainWindow(QMainWindow):
                     render_precision=self.cmb_precision.currentText(),
                 )
                 renderer = OpenscadRenderer(config)
-                renderer.render_preview_view(Path(self._scad_path), target_view_png, size=(600, 450), view=view_name)
+                if view_name == "explode":
+                    renderer.render_exploded_view(Path(self._scad_path), target_view_png, size=(600, 450), explode_factor=1.2)
+                else:
+                    renderer.render_preview_view(Path(self._scad_path), target_view_png, size=(600, 450), view=view_name)
                 self._show_preview(str(target_view_png), origin_image=self._last_image)
                 self.log(f"✅ 即时渲染视角成功: {target_view_png.name}")
                 self._refresh_file_list(p.parent)
