@@ -33,7 +33,9 @@
   自动修正规格并重渲染，直到符合或达上限；含回归保护（拒绝减少部件数的
   “简化型”修正）与得分回退（未收敛时保留迄今最好的一版）。
 - **自动接地平贴 Z=0**：自动计算包围盒最低点并垂直对齐，确保模型平贴打印底板，开箱即切片。
-- **便携式 HTML 3D 查看器**：导出 STL 同步生成内嵌 Three.js 查看器，双击即可在任何浏览器 360° 旋转检视。
+- **便携式 HTML 3D 查看器**：导出 STL 同步生成内嵌 Three.js 查看器，双击即可在任何浏览器 360° 旋转检视，支持实时截面剖切 (Clip Plane) 与 3D 尺寸标定盒。
+- **现代化切片 3MF 联动导出**：默认同步生成紧凑的 `.3mf` 格式，原生适配 Bambu Studio / OrcaSlicer / PrusaSlicer。
+- **3D 模型展厅画廊 (Showcase Gallery)**：自动聚合全部历史模型，生成现代化响应式 `gallery.html` 展厅，提供实时搜索与全套资源下载。
 - **参数化 Customizer 支持**：自定义参数直接生成 OpenSCAD 全局变量，在 OpenSCAD 中可拖动滑块交互式微调。
 - **高阶草图拉伸与阵列**：支持 2D polygon 直拉伸 (`linear_extrude`)、回转体 (`rotate_extrude`) 与环形/线性等距阵列 (`radial_array` / `linear_array`)。
 - **3D 网页端实时截面剖切**：独立 HTML 查看器提供 Z 轴动态切片滑块，直观检查内部内腔与壁厚。
@@ -79,6 +81,9 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 # 4) 只生成 .scad 不渲染
 .venv/bin/python main.py -i photo.jpg --no-render
 
+# 5) 一键生成或更新 3D 模型展厅画廊
+.venv/bin/python main.py --gallery
+
 # 查看 LLM 识别用的系统提示词/规格 schema
 .venv/bin/python main.py -i photo.jpg --show-prompt
 ```
@@ -110,6 +115,7 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 | `openscad_agent/core.py` | 配置、OpenSCAD 渲染器（多视角/精度控制/binstl）、图片预处理、3D网页查看器 |
 | `openscad_agent/spec.py` | 规格校验与规范化层（类型净化/缺省补全/原语别名/锥台） |
 | `openscad_agent/doctor.py` | 3D 打印适印性自检系统（壁厚/微孔/细长比/热床尺寸诊断） |
+| `openscad_agent/gallery.py` | 3D 资产展厅画廊生成器（响应式网页、卡片搜索、一键下载） |
 | `openscad_agent/geometry.py` | 规格 → OpenSCAD 源码转译（支持 rotation/capsule/mirror/接地Z=0） |
 | `openscad_agent/vision.py` | Agnes 视觉 API 客户端 + 连续会话审查闭环 + Few-Shot 提示词 |
 | `openscad_agent/agent.py` | 全流程编排 + 编译修复 + 会话链审查闭环 + 多图联合输入 |
