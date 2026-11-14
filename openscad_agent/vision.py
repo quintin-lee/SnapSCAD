@@ -116,11 +116,10 @@ class AgnesVision:
             raise
 
     # ------------------------------------------------------------------
-    def _chat_raw(self, messages: list[dict[str, Any]]) -> str:
-        """通用对话：返回 LLM 回复的原始文本，不做 JSON 规格解析。
+    def _post_chat(self, messages: list[dict[str, Any]]) -> str:
+        """公共 POST chat/completions，含 429/5xx 指数退避重试，返回原始文本。
 
-        用于预览图审查、自由问答等不需要提取 spec 的场景。
-        同样带 429/5xx 指数退避重试。
+        被 _chat（需解析 spec）与 _chat_raw（通用文本）共享，消除重复重试逻辑。
         """
         url = f"{self.config.base_url.rstrip('/')}/v1/chat/completions"
         payload: dict[str, Any] = {
@@ -169,6 +168,14 @@ class AgnesVision:
             time.sleep(wait)
 
         raise RuntimeError("Agnes API 重试耗尽")
+
+    def _chat_raw(self, messages: list[dict[str, Any]]) -> str:
+        """通用对话：返回 LLM 回复的原始文本，不做 JSON 规格解析。
+
+        用于预览图审查、自由问答等不需要提取 spec 的场景。
+        复用 _post_chat 的重试逻辑。
+        """
+        return self._post_chat(messages)
 
     #: 预览图审查系统提示：把渲染出的 2D 预览图 + 原图回传 LLM，判断是否吻合预期
     REVIEW_PROMPT = """\
@@ -284,63 +291,13 @@ class AgnesVision:
 
     # ------------------------------------------------------------------
     def _chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        """调用 Agnes chat completions，含 429/5xx 自动重试。
+        """调用 Agnes chat completions 并解析出 JSON 规格。
 
-        Agnes 免费额度容易触发 429 限流，且多模态消息可能返回 500
-        (get_channel_failed)。此处对 429/500/502/503 做指数退避重试，
-        500 且带 get_channel 标记时额外多等一会。
+        重试逻辑统一在 _post_chat（429/5xx 指数退避）；此处仅负责把
+        原始文本解析为 spec dict。
         """
-        url = f"{self.config.base_url.rstrip('/')}/v1/chat/completions"
-        payload: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
-            "temperature": self.config.temperature,
-        }
-
-        max_attempts = 8
-        for attempt in range(1, max_attempts + 1):
-            try:
-                resp = requests.post(
-                    url, headers=self._headers(), json=payload,
-                    timeout=self.config.api_timeout,
-                )
-            except requests.RequestException as e:
-                if attempt == max_attempts:
-                    raise RuntimeError(f"Agnes API 网络异常: {e}") from e
-                self._backoff(attempt, "network")
-                continue
-
-            code = resp.status_code
-            if code == 200:
-                data = resp.json()
-                try:
-                    content = data["choices"][0]["message"]["content"]
-                except (KeyError, IndexError) as e:
-                    raise RuntimeError(
-                        f"Agnes 返回结构异常: {json.dumps(data, ensure_ascii=False)[:500]}"
-                    ) from e
-                return self._extract_spec(content)
-
-            # 解析错误体
-            detail = ""
-            try:
-                detail = resp.json().get("error", {}).get("message", "")
-            except Exception:  # noqa: BLE001
-                detail = resp.text[:300]
-
-            retryable = code in (429, 500, 502, 503, 504)
-            if not retryable or attempt == max_attempts:
-                raise RuntimeError(f"Agnes API HTTP {code}: {detail or resp.text[:300]}")
-
-            # 429 限流 / 500 模型暂不可用 → 指数退避（上限 60s）
-            base_wait = 6 if code == 429 else 10
-            wait = min(base_wait * (2 ** (attempt - 1)), 60)
-            _log.warning("[agnes] HTTP %s (尝试 %d/%d): %s", code, attempt, max_attempts, detail)
-            _log.info("[agnes] %ss 后重试…", wait)
-            import time
-            time.sleep(wait)
-
-        raise RuntimeError("Agnes API 重试耗尽")
+        content = self._post_chat(messages)
+        return self._extract_spec(content)
 
     @staticmethod
     def _backoff(attempt: int, reason: str) -> None:
