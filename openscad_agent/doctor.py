@@ -37,6 +37,58 @@ class PrintabilityReport:
         return f"适印性评分: {self.score}/100 ({status})"
 
 
+def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """计算单个部件的世界坐标 Axis-Aligned Bounding Box (AABB)。"""
+    prim = p.get("primitive", "cube")
+    size = normalize_size(prim, p)
+    center = p.get("center", [0, 0, 0])
+    cx = float(center[0]) if len(center) >= 1 else 0.0
+    cy = float(center[1]) if len(center) >= 2 else 0.0
+    cz = float(center[2]) if len(center) >= 3 else 0.0
+
+    if prim in ("cube", "cuboid", "box"):
+        w, d, h = size[0], size[1], size[2]
+        return ((cx - w / 2, cy - d / 2, cz), (cx + w / 2, cy + d / 2, cz + h))
+    elif prim in ("cylinder", "capsule"):
+        d = size[0]
+        h = size[1] if len(size) >= 2 else 10.0
+        r = d / 2.0
+        return ((cx - r, cy - r, cz), (cx + r, cy + r, cz + h))
+    elif prim == "sphere":
+        r = size[0] if size else 5.0
+        return ((cx - r, cy - r, cz - r), (cx + r, cy + r, cz + r))
+    else:
+        return ((cx - 10, cy - 10, cz), (cx + 10, cy + 10, cz + 10))
+
+
+def check_assembly_interference(parts: list[dict[str, Any]]) -> list[tuple[str, str, str, float]]:
+    """检测部件对之间的空间几何干涉与接触贴合关系。
+
+    返回列表项: (part_A_id, part_B_id, 关系类型 'collision' | 'contact', 重叠体积或接触面积)
+    """
+    results: list[tuple[str, str, str, float]] = []
+    if len(parts) < 2:
+        return results
+
+    aabbs = [(_get_part_aabb(p), str(p.get("id", f"part_{i}"))) for i, p in enumerate(parts)]
+    for i in range(len(aabbs)):
+        (min_a, max_a), id_a = aabbs[i]
+        for j in range(i + 1, len(aabbs)):
+            (min_b, max_b), id_b = aabbs[j]
+            dx = min(max_a[0], max_b[0]) - max(min_a[0], min_b[0])
+            dy = min(max_a[1], max_b[1]) - max(min_a[1], min_b[1])
+            dz = min(max_a[2], max_b[2]) - max(min_a[2], min_b[2])
+
+            if dx > 0.5 and dy > 0.5 and dz > 0.5:
+                v_overlap = round(dx * dy * dz, 1)
+                if v_overlap > 30.0:
+                    results.append((id_a, id_b, "collision", v_overlap))
+            elif dx > 0.5 and dy > 0.5 and abs(dz) < 0.2:
+                contact_area = round(dx * dy, 1)
+                results.append((id_a, id_b, "contact", contact_area))
+    return results
+
+
 def _estimate_primitive_volume_mm3(prim: str, size: list[float]) -> float:
     """粗略估算基础几何体的体积 (mm³)。"""
     if prim in ("cube", "cuboid", "box"):
@@ -140,6 +192,13 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
                     report.tips.append(f"部件 '{pid}' 孔洞直径仅 {hole_d:.1f}mm，耗材热缩易偏紧，建议预留 0.2mm 孔径补偿")
                     report.score -= 3
 
+    # 装配几何干涉与配合自检
+    for id_a, id_b, rel_type, val in check_assembly_interference(parts)[:3]:
+        if rel_type == "collision":
+            report.warnings.append(f"部件 '{id_a}' 与 '{id_b}' 存在空间实体干涉重叠 (重叠 {val:.1f} mm³)，请注意装配间隙")
+        elif rel_type == "contact":
+            report.tips.append(f"部件 '{id_a}' 与 '{id_b}' 贴合接触良好 (接触面 {val:.1f} mm²)")
+
     # 包围盒评估
     dim_x = max(max_x - min_x, 0.0) if min_x != float("inf") else 0.0
     dim_y = max(max_y - min_y, 0.0) if min_y != float("inf") else 0.0
@@ -240,4 +299,4 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     return out_path
 
 
-__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide"]
+__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference"]
