@@ -51,13 +51,80 @@ def _sphere_code(size: list[float], center: list[float], holes: list[dict], note
 
 
 def _polyhedron_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
-    """polyhedron 降级处理：LLM 若给出 vertices 则使用，否则退化为立方体。"""
+    """polyhedron 无顶点数据时的降级处理（退化为 box）。
+
+    有 points/faces 时由 _polyhedron_vertices 专门处理，不走此 builder。
+    """
     x, y, z = (float(size[i]) for i in range(3))
     cx, cy, cz = (float(center[i]) for i in range(3))
     lines = [f"  // {note} (polyhedron 降级为 box)" if note else "  // polyhedron -> box"]
     lines.append(f"  translate([{_fmt(cx - x / 2)}, {_fmt(cy - y / 2)}, {_fmt(cz)}])")
     lines.append(f"    cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z)}]);")
     return "\n".join(lines)
+
+
+def _has_polyhedron_vertices(part: dict[str, Any]) -> bool:
+    """判断 polyhedron 是否携带可用顶点数据。"""
+    points = part.get("points") or part.get("vertices")
+    faces = part.get("faces")
+    return isinstance(points, list) and len(points) > 0 and isinstance(faces, list) and len(faces) > 0
+
+
+def _fmt_point(p) -> str:
+    try:
+        return f"[{_fmt(p[0])}, {_fmt(p[1])}, {_fmt(p[2])}]"
+    except (IndexError, TypeError, ValueError):
+        return "[0, 0, 0]"
+
+
+def _polyhedron_vertices(part: dict[str, Any], center: list[float], note: str) -> list[str]:
+    """用 LLM 提供的 points/faces 生成真正的 polyhedron() 调用。
+
+    - points: 顶点坐标数组（绝对坐标，已包含位置；若为局部坐标则加上 center 平移）
+    - faces:  面（顶点下标数组）
+    顶点坐标若都在 [0,1] 量级（疑似归一化/局部），自动加上 center 平移；
+    否则视为绝对坐标直接使用。
+    """
+    points = part.get("points") or part.get("vertices")
+    faces = part.get("faces")
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    # 判断是否需要平移：若所有顶点分量绝对值都较小（<=2），视为局部坐标
+    coords = []
+    try:
+        for p in points:
+            coords.append([float(p[0]), float(p[1]), float(p[2])])
+    except (IndexError, TypeError, ValueError):
+        # 顶点数据非法 → 降级
+        return _polyhedron_code([10, 10, 10], center, [], note).split("\n")
+
+    max_abs = max((abs(c) for p in coords for c in p), default=0.0)
+    # 所有顶点分量都较小（<=2）视为局部/归一化坐标 → 加上 center 平移
+    translate = max_abs <= 2.0
+
+    lines = [f"  // {note} (polyhedron {len(coords)}v/{len(faces)}f)" if note else "  // polyhedron"]
+    # 顶点列表
+    pt_lines: list[str] = []
+    for p in coords:
+        if translate:
+            pt_lines.append(f"    [{_fmt(p[0] + cx)}, {_fmt(p[1] + cy)}, {_fmt(p[2] + cz)}]")
+        else:
+            pt_lines.append(f"    [{_fmt(p[0])}, {_fmt(p[1])}, {_fmt(p[2])}]")
+    # 面列表
+    face_lines: list[str] = []
+    for f in faces:
+        if isinstance(f, (list, tuple)):
+            idx = ", ".join(_fmt(int(i)) for i in f)
+            face_lines.append(f"    [{idx}]")
+        else:
+            face_lines.append(f"    [{_fmt(int(f))}]")
+
+    lines.append("  polyhedron(points = [")
+    lines.append(",\n".join(pt_lines))
+    lines.append("  ], faces = [")
+    lines.append(",\n".join(face_lines))
+    lines.append("  ], convexity = 3);")
+    return lines
 
 
 PRIMITIVE_BUILDERS = {
@@ -134,6 +201,22 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
 
     # 规范化尺寸：兼容 size=[..]、size=标量、radius/height、cuboid/box 等多种 LLM 输出
     size = _normalize_size(prim, part)
+
+    lines: list[str] = [f"module {part_name}() {{"]
+
+    # polyhedron 带顶点数据 → 生成真正的 polyhedron()；否则走通用 builder
+    if prim == "polyhedron" and _has_polyhedron_vertices(part):
+        poly_body = _polyhedron_vertices(part, center, note)
+        rx, ry, rz = (float(rotation[i]) for i in range(3))
+        if any(abs(v) > 1e-6 for v in (rx, ry, rz)):
+            lines.append(f"  translate([{_fmt(float(center[0]))}, {_fmt(float(center[1]))}, {_fmt(float(center[2]))}])")
+            lines.append(f"    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
+            for l in poly_body:
+                lines.append(f"      {l}" if l.strip() else l)
+        else:
+            lines += poly_body
+        lines.append("}")
+        return lines
 
     # 部件体（主体 + 孔洞）
     body: list[str] = []
