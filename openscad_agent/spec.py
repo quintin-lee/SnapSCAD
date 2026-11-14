@@ -21,7 +21,7 @@ from .log import get_logger as _log_module
 _log = _log_module()
 
 #: 合法原语名（含 LLM 常见别名）
-PRIMITIVES = {"cube", "cuboid", "box", "cylinder", "sphere", "polyhedron"}
+PRIMITIVES = {"cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull"}
 #: 原语别名 → 标准名
 _ALIAS = {"cuboid": "cube", "box": "cube"}
 
@@ -122,6 +122,10 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         return [d, h]
     if p == "sphere":
         return [_sanitize_num(part.get("radius", 5), 5.0)]
+    if p == "capsule":
+        r = _sanitize_num(part.get("radius", 5), 5.0)
+        h = _sanitize_num(part.get("height", part.get("length", 20)), 20.0)
+        return [r, h]
     return [10.0, 10.0, 10.0]
 
 
@@ -162,6 +166,10 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
     color = _sanitize_color(part.get("color"))
     if color is not None:
         out["color"] = color
+    if part.get("symmetric") or part.get("symmetry"):
+        out["symmetric"] = True
+    if "mirror" in part and part.get("mirror"):
+        out["mirror"] = _as_vec3(part.get("mirror"), (1.0, 0.0, 0.0))
     out["size"] = normalize_size(prim, part)
     holes = part.get("holes") or []
     out["holes"] = [_normalize_hole(h) for h in holes]
@@ -239,6 +247,12 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         if dropped:
             issues.append(f"assembly.union_parts 含未知 id {dropped}，已忽略")
         assembly["union_parts"] = valid or all_ids
+
+    # intersection_parts 校验
+    intersect = assembly.get("intersection_parts")
+    if isinstance(intersect, list) and intersect:
+        valid_i = [u for u in intersect if str(u) in set(all_ids)]
+        assembly["intersection_parts"] = valid_i
     out["assembly"] = assembly
 
     return out, issues

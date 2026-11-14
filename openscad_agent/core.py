@@ -157,9 +157,11 @@ class OpenscadRenderer:
         if fmt not in self.FORMATS:
             raise ValueError(f"不支持的导出格式: {fmt}，可选: {sorted(self.FORMATS)}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # 若导出格式为 stl，使用 binstl (二进制 STL，体积缩小 70%+, 导出速度更快)
+        export_fmt = "binstl" if fmt == "stl" else fmt
         cmd = self._base_cmd() + [
             "-o", str(out_path),
-            f"--export-format={fmt}",
+            f"--export-format={export_fmt}",
             str(scad_path),
         ]
         code, out, err = run_cmd(cmd)
@@ -253,7 +255,7 @@ class OpenscadRenderer:
             target = out_stl
             target.parent.mkdir(parents=True, exist_ok=True)
             cleanup = False
-        cmd = self._base_cmd() + ["-o", str(target), "--export-format=stl", str(scad_path)]
+        cmd = self._base_cmd() + ["-o", str(target), "--export-format=binstl", str(scad_path)]
         code, out, err = run_cmd(cmd)
         if cleanup:
             try:
@@ -326,18 +328,21 @@ SPEC_SCHEMA = """\
   "parts": [
     {
       "id": "string, 部件唯一 id（如 'body'）",
-      "primitive": "cube|cylinder|sphere|polyhedron",
+      "primitive": "cube|cylinder|sphere|capsule|polyhedron|hull",
       // 尺寸字段（二选一，优先 size）:
       //   cube:          size: [x, y, z]
       //   cylinder/cone: size: [直径, 高度]  或  [底径d1, 顶径d2, 高度]
       //                  或 radius: N, height: N 或 r1: N, r2: N, height: N (圆锥/圆台)
       //   sphere:        size: [半径]       或  radius: N
+      //   capsule:       size: [半径, 柱高]  或  radius: N, height: N (平滑两端倒角胶囊柱)
       "size": [x, y, z],
-      "radius": N,          // 圆柱/球专用（size 缺省时使用）
-      "height": N,          // 圆柱专用（size 缺省时使用）
+      "radius": N,          // 圆柱/球/胶囊专用（size 缺省时使用）
+      "height": N,          // 圆柱/胶囊专用（size 缺省时使用）
       "r1": N,              // 圆锥/圆台底半径 (可选)
       "r2": N,              // 圆锥/圆台顶半径 (可选，为 0 则为尖锥)
       "color": "string|[r,g,b]", // 部件视觉颜色（如 "dimgray", "firebrick", "gold", "#e67e22"），帮助预览图区分各语义部件
+      "symmetric": true,    // 可选，沿X轴双侧镜像对称 (如翅膀、把手、双足对称结构)
+      "mirror": [0, 0, 0],  // 可选，[mx, my, mz] 单侧镜像轴
       "center": [x, y, z], // 部件原点坐标（mm）
       "rotation": [rx, ry, rz], // 绕三轴角度（度，可选）
       "holes": [           // 需减去的实体（孔、凹槽），字段同上
@@ -349,6 +354,7 @@ SPEC_SCHEMA = """\
   "assembly": {
     "description": "string, 装配关系说明",
     "union_parts": ["id", ...],              // 需要 union 的部件 id
+    "intersection_parts": ["id", ...],       // 可选，需要做求交集的部件 id
     "difference_from": "string|id, 基准部件 id（可选, 表示 parts 中其余为挖除项）"
   },
   "print_tips": ["string", ...]               // 3D 打印建议（可选）

@@ -51,6 +51,22 @@ def _cube_code(size: list[float], center: list[float], holes: list[dict], note: 
     return "\n".join(lines)
 
 
+def _capsule_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """胶囊体生成器：通过两端球体的凸包 hull() 构造平滑倒角胶囊柱。"""
+    r = float(size[0]) if size else 5.0
+    h = float(size[1]) if len(size) >= 2 else 20.0
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    span = max(h - 2 * r, 0.0)
+    lines = [f"  // {note}" if note else "  // capsule"]
+    lines.append("  hull() {")
+    lines.append(f"    translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz + r)}])")
+    lines.append(f"      sphere(r = {_fmt(r)});")
+    lines.append(f"    translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz + r + span)}])")
+    lines.append(f"      sphere(r = {_fmt(r)});")
+    lines.append("  }")
+    return "\n".join(lines)
+
+
 def _sphere_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
     r = float(size[0])
     cx, cy, cz = (float(center[i]) for i in range(3))
@@ -143,6 +159,7 @@ PRIMITIVE_BUILDERS = {
     "box": _cube_code,
     "cylinder": _cylinder_code,
     "sphere": _sphere_code,
+    "capsule": _capsule_code,
     "polyhedron": _polyhedron_code,
 }
 
@@ -242,13 +259,28 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
 
     if has_rot:
         # 绕部件中心旋转：translate 到中心 → rotate → 内部几何以中心为原点生成
-        lines.append(f"{indent}  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
-        lines.append(f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
-        lines += [f"{indent}      {l}" if l else l for l in _part_body_rel(prim, size, note)]
+        inner = [f"{indent}  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])",
+                 f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])"]
+        inner += [f"{indent}      {l}" if l else l for l in _part_body_rel(prim, size, note)]
         for hole in holes:
-            lines += [f"{indent}{l}" if l else l for l in _hole_code_rel(hole, center)]
+            inner += [f"{indent}{l}" if l else l for l in _hole_code_rel(hole, center)]
     else:
-        lines += body
+        inner = body
+
+    # 镜像与对称 (Symmetry & Mirror)
+    if part.get("symmetric"):
+        lines.append(f"{indent}  union() {{")
+        lines += [f"{indent}    {l}" if l else l for l in inner]
+        lines.append(f"{indent}    mirror([1, 0, 0])")
+        lines += [f"{indent}      {l}" if l else l for l in inner]
+        lines.append(f"{indent}  }}")
+    elif part.get("mirror"):
+        m = part["mirror"]
+        lines.append(f"{indent}  mirror([{_fmt(m[0])}, {_fmt(m[1])}, {_fmt(m[2])}]) {{")
+        lines += [f"{indent}    {l}" if l else l for l in inner]
+        lines.append(f"{indent}  }}")
+    else:
+        lines += inner
 
     if c_close:
         lines.append(c_close)
@@ -318,9 +350,9 @@ def _estimate_part_min_z(part: dict[str, Any]) -> float:
         if has_tilt:
             return cz - h / 2.0
         return cz
-    elif prim == "sphere":
+    elif prim == "sphere" or prim == "capsule":
         r = float(size[0]) if size else 5.0
-        return cz - r
+        return cz - (0 if prim == "capsule" else r)
     elif prim == "polyhedron":
         pts = part.get("points") or part.get("vertices")
         if isinstance(pts, list) and pts:
