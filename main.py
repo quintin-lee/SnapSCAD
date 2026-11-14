@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from openscad_agent import AgentConfig, OpenscadAgent, SPEC_SCHEMA
+from openscad_agent.gallery import generate_gallery
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,9 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="OpenSCAD Agent: 图片/文字 -> OpenSCAD 3D 模型",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    src = p.add_mutually_exclusive_group(required=True)
+    src = p.add_mutually_exclusive_group(required=False)
     src.add_argument("--image", "-i", nargs="+", help="输入图片路径 (支持传入多张多角度照片, 如 -i f.jpg s.jpg)")
     src.add_argument("--describe", "-d", help="文字描述, 无图片场景")
+
+    p.add_argument("--gallery", action="store_true", help="根据输出目录中的全部模型生成 3D 展厅画廊网页 (gallery.html)")
 
     p.add_argument("--hint", default="", help="对图片的补充说明, 帮助 LLM 理解物体")
     p.add_argument("--output", "-o", default="out", help="输出目录 (默认 ./out)")
@@ -57,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     setup_logging(log_file="out/agent.log")
+
+    if args.gallery and not args.image and not args.describe:
+        gpath = generate_gallery(args.output)
+        print(f"✅ 3D 模型展厅画廊已生成: {gpath}")
+        return 0
 
     config = AgentConfig(
         output_dir=args.output,
@@ -100,6 +108,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   预览图        : {result.preview_png}")
         if result.viewer_html:
             print(f"   3D 网页查看器 : {result.viewer_html}")
+        try:
+            gpath = generate_gallery(args.output)
+            print(f"   3D 展厅画廊   : {gpath}")
+        except Exception:
+            pass
         doc = getattr(result, "doctor_report", None)
         if doc:
             print(f"   适印性自检    : {doc.summary()} | 尺寸: {doc.bounding_box[0]}x{doc.bounding_box[1]}x{doc.bounding_box[2]}mm")

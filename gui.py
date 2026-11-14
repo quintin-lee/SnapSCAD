@@ -395,6 +395,10 @@ class MainWindow(QMainWindow):
         self.btn_open_web.clicked.connect(self.on_open_web_viewer)
         act_bar.addWidget(self.btn_open_web)
 
+        self.btn_gallery = QPushButton("🏛️ 3D 展厅画廊")
+        self.btn_gallery.clicked.connect(self.on_open_gallery)
+        act_bar.addWidget(self.btn_gallery)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -709,6 +713,14 @@ class MainWindow(QMainWindow):
             self.log(f"已在浏览器中打开 3D 查看器: {html.name}")
             return
         QMessageBox.information(self, "提示", "尚未生成 3D 网页查看器。导出 STL 3D模型时将自动配套生成。")
+
+    def on_open_gallery(self) -> None:
+        """扫描输出目录生成并打开 3D 模型展厅画廊网页。"""
+        out_dir = Path(self.txt_outdir.text().strip() or "out").resolve()
+        from openscad_agent.gallery import generate_gallery
+        gpath = generate_gallery(out_dir)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(gpath)))
+        self.log(f"🏛️ 3D 模型展厅画廊已生成并在浏览器中打开: {gpath.name}")
 
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
