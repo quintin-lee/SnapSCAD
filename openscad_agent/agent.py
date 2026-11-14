@@ -50,6 +50,8 @@ class AgentResult:
     errors: list[str] = field(default_factory=list)
     fix_rounds: int = 0
     review_rounds: int = 0
+    #: 生成的独立 HTML 3D 网页交互查看器路径
+    viewer_html: Optional[str] = None
     #: 最后一次审查结论（含 match/score/issues/verdict）
     review: Optional[dict[str, Any]] = None
 
@@ -224,11 +226,18 @@ class OpenscadAgent:
                 except RuntimeError as e:
                     errors.append(f"审查后重新渲染失败: {e}")
 
+        viewer_html: Optional[str] = None
+        if model_file and Path(model_file).suffix.lower() == ".stl":
+            v_cand = Path(model_file).with_name(f"{Path(model_file).stem}_viewer.html")
+            if v_cand.exists():
+                viewer_html = str(v_cand)
+
         _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
             success=True, spec=spec, spec_path=spec_path_str,
             scad_path=str(scad_path), model_file=model_file,
-            preview_png=preview_png, errors=errors, fix_rounds=rounds,
+            preview_png=preview_png, viewer_html=viewer_html,
+            errors=errors, fix_rounds=rounds,
             review_rounds=review_rounds, review=self.last_review,
         )
 

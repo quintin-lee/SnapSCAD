@@ -5,7 +5,7 @@
   OpenscadAgent(config).build_from_description(text)
 """
 
-from .core import AgentConfig, OpenscadRenderer, preprocess_image, SPEC_SCHEMA
+from .core import AgentConfig, OpenscadRenderer, preprocess_image, SPEC_SCHEMA, generate_html_viewer
 from .agent import AgentResult, OpenscadAgent
 from .vision import AgnesVision, SpecParseError
 from .geometry import spec_to_scad, write_spec_and_scad
@@ -27,4 +27,5 @@ __all__ = [
     "get_logger",
     "validate_spec",
     "normalize_part",
+    "generate_html_viewer",
 ]
