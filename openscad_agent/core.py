@@ -297,6 +297,47 @@ class OpenscadRenderer:
         _log.info("[render] 已生成机械爆炸图分解视图: %s", out_png)
         return out_png
 
+    def render_blueprint(self, scad_path: Path, out_blueprint: Path, sub_size: tuple[int, int] = (400, 300)) -> Path:
+        """合成 2x2 工业四视图工程制图蓝图 (正视/轴测/俯视/侧视)。"""
+        out_blueprint = Path(out_blueprint)
+        out_blueprint.parent.mkdir(parents=True, exist_ok=True)
+        stem = scad_path.stem
+
+        tmp_dir = out_blueprint.parent / f"_bptmp_{stem}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        v_front = tmp_dir / f"{stem}_f.png"
+        v_iso = tmp_dir / f"{stem}_i.png"
+        v_top = tmp_dir / f"{stem}_t.png"
+        v_side = tmp_dir / f"{stem}_s.png"
+
+        try:
+            self.render_preview_view(scad_path, v_front, size=sub_size, view="front")
+            self.render_preview_view(scad_path, v_iso, size=sub_size, view="iso")
+            self.render_preview_view(scad_path, v_top, size=sub_size, view="top")
+            self.render_preview_view(scad_path, v_side, size=sub_size, view="side")
+
+            montage_bin = shutil.which("montage")
+            if montage_bin:
+                cmd = [
+                    montage_bin,
+                    str(v_front), str(v_iso), str(v_top), str(v_side),
+                    "-title", f"Engineering Blueprint (4-View): {stem}",
+                    "-tile", "2x2",
+                    "-geometry", f"{sub_size[0]}x{sub_size[1]}+6+6",
+                    "-background", "#0f172a",
+                    "-fill", "#38bdf8",
+                    str(out_blueprint),
+                ]
+                code, out, err = run_cmd(cmd)
+                if code == 0:
+                    _log.info("[render] 已生成四视图工业制图蓝图: %s", out_blueprint)
+                    return out_blueprint
+            shutil.copyfile(v_iso, out_blueprint)
+            return out_blueprint
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def export_model_or_validate(self, scad_path: Path, out_stl: Optional[Path]) -> tuple[bool, str, Optional[Path]]:
         """导出模型与校验合二为一，避免对同一 .scad 重复 CSG 求值。
 

@@ -171,6 +171,7 @@ class MainWindow(QMainWindow):
             "view_front": "正视",
             "view_iso": "等轴测",
             "view_explode": "💥 爆炸图",
+            "view_blueprint": "📐 蓝图",
             "btn_open_scad": "🚀 在 OpenSCAD 中打开 3D 模型",
             "btn_web_viewer": "🌐 网页 3D 查看器",
             "btn_gallery": "🏛️ 3D 展厅画廊",
@@ -199,6 +200,7 @@ class MainWindow(QMainWindow):
             "view_front": "Front",
             "view_iso": "Isometric",
             "view_explode": "💥 Explode",
+            "view_blueprint": "📐 Blueprint",
             "btn_open_scad": "🚀 Open in OpenSCAD",
             "btn_web_viewer": "🌐 Web 3D Viewer",
             "btn_gallery": "🏛️ 3D Showcase Gallery",
@@ -535,7 +537,8 @@ class MainWindow(QMainWindow):
         self.btn_view_front = QPushButton("正视")
         self.btn_view_iso = QPushButton("等轴测")
         self.btn_view_explode = QPushButton("💥 爆炸图")
-        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso, self.btn_view_explode):
+        self.btn_view_blueprint = QPushButton("📐 蓝图")
+        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso, self.btn_view_explode, self.btn_view_blueprint):
             btn.setFixedHeight(26)
             view_bar.addWidget(btn)
         view_bar.addStretch(1)
@@ -546,6 +549,7 @@ class MainWindow(QMainWindow):
         self.btn_view_front.clicked.connect(lambda: self.on_switch_view("front"))
         self.btn_view_iso.clicked.connect(lambda: self.on_switch_view("iso"))
         self.btn_view_explode.clicked.connect(lambda: self.on_switch_view("explode"))
+        self.btn_view_blueprint.clicked.connect(lambda: self.on_switch_view("blueprint"))
 
         # 原图 | 预览图 并排
         cmp_split = QSplitter(Qt.Orientation.Horizontal)
@@ -659,6 +663,7 @@ class MainWindow(QMainWindow):
         self.btn_view_front.setText(d["view_front"])
         self.btn_view_iso.setText(d["view_iso"])
         self.btn_view_explode.setText(d["view_explode"])
+        self.btn_view_blueprint.setText(d["view_blueprint"])
         self.btn_open_scad.setText(d["btn_open_scad"])
         self.btn_open_web.setText(d["btn_web_viewer"])
         self.btn_gallery.setText(d["btn_gallery"])
@@ -923,6 +928,8 @@ class MainWindow(QMainWindow):
             candidates = [p, p.with_name(f"{p.stem}_v_perspective.png")]
         elif view_name == "explode":
             candidates = [p.with_name(f"{p.stem}_v_explode.png"), p.with_name(f"{p.stem}_explode.png")]
+        elif view_name == "blueprint":
+            candidates = [p.with_name(f"{p.stem}_blueprint.png"), p.with_name(f"{p.stem}_v_blueprint.png")]
         else:
             candidates = [
                 p.with_name(f"{p.stem}_v_{view_name}.png"),
@@ -946,6 +953,8 @@ class MainWindow(QMainWindow):
                 renderer = OpenscadRenderer(config)
                 if view_name == "explode":
                     renderer.render_exploded_view(Path(self._scad_path), target_view_png, size=(600, 450), explode_factor=1.2)
+                elif view_name == "blueprint":
+                    renderer.render_blueprint(Path(self._scad_path), target_view_png)
                 else:
                     renderer.render_preview_view(Path(self._scad_path), target_view_png, size=(600, 450), view=view_name)
                 self._show_preview(str(target_view_png), origin_image=self._last_image)
