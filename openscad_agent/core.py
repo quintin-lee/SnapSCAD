@@ -85,6 +85,8 @@ class AgentConfig:
     extra_system: str = ""
     #: 是否自动平移使模型底部贴合 Z=0 打印底板
     ground_z: bool = True
+    #: 是否同步导出现代切片格式 3MF (适配 Bambu/Orca/Prusa Slicer)
+    export_3mf: bool = True
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
@@ -169,6 +171,20 @@ class OpenscadRenderer:
             raise RuntimeError(f"OpenSCAD 导出失败 ({scad_path.name} -> {out_path.name}):\n{err or out}")
         _log.info("[render] 已导出 3D 模型: %s", out_path)
         if fmt == "stl":
+            # 同步导出 3MF 现代切片格式
+            if getattr(self.config, "export_3mf", True):
+                try:
+                    target_3mf = out_path.with_suffix(".3mf")
+                    cmd_3mf = self._base_cmd() + [
+                        "-o", str(target_3mf),
+                        "--export-format=3mf",
+                        str(scad_path),
+                    ]
+                    run_cmd(cmd_3mf)
+                    _log.info("[render] 已同步导出 3MF 切片模型: %s", target_3mf.name)
+                except Exception as e:  # noqa: BLE001
+                    _log.warning("[render] 同步导出 3MF 失败: %s", e)
+
             try:
                 html_path = out_path.with_name(f"{out_path.stem}_viewer.html")
                 generate_html_viewer(out_path, html_path, model_name=out_path.stem)

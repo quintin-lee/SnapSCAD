@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="OpenAI 兼容 API 端点 (可切换其他视觉 LLM)")
     p.add_argument("--no-review", action="store_true", help="跳过渲染图审查闭环 (默认开启)")
     p.add_argument("--no-multi-view", action="store_true", help="审查时不做多视角渲染 (默认开启)")
+    p.add_argument("--no-3mf", action="store_true", help="跳过同步导出 3MF 格式 (默认同时导出 STL+3MF)")
     p.add_argument("--no-render", action="store_true", help="跳过 3D/预览渲染, 仅生成 .scad")
     p.add_argument("--preview-only", action="store_true", help="仅渲染 2D 预览, 跳过 3D 导出")
     p.add_argument("--max-image-side", type=int, default=2048, help="图片预处理最大边长")
@@ -65,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         image_max_side=args.max_image_side,
         extra_system=args.extra_system,
+        export_3mf=not args.no_3mf,
     )
 
     agent = OpenscadAgent(config)
@@ -90,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         if result.spec_path:
             print(f"   规格 JSON     : {result.spec_path}")
         if result.model_file:
-            print(f"   3D 模型       : {result.model_file}")
+            print(f"   3D 模型 (STL) : {result.model_file}")
+            f3mf = Path(result.model_file).with_suffix(".3mf")
+            if f3mf.exists():
+                print(f"   3D 模型 (3MF) : {f3mf}")
         if result.preview_png:
             print(f"   预览图        : {result.preview_png}")
         if result.viewer_html:
