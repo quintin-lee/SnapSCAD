@@ -101,12 +101,20 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         if p == "cylinder":
             return [v * 2, v]
     if isinstance(raw, list) and raw:
-        return [_sanitize_num(x, 10.0) for x in raw[:3] or [10.0, 10.0, 10.0]] or [10.0] * 3
+        clean = [_sanitize_num(x, 10.0) for x in raw[:3] or [10.0, 10.0, 10.0]] or [10.0] * 3
+        if p in ("cube", "cuboid", "box"):
+            fillet = _sanitize_num(part.get("fillet", part.get("chamfer", 0.0)), 0.0)
+            if fillet > 0.0:
+                clean.append(fillet)
+        return clean
     # 从其他字段推断
     if p in ("cube", "cuboid", "box"):
         w = _sanitize_num(part.get("width", part.get("x", 10)), 10.0)
         d = _sanitize_num(part.get("depth", part.get("y", 10)), 10.0)
         h = _sanitize_num(part.get("height", part.get("z", 10)), 10.0)
+        fillet = _sanitize_num(part.get("fillet", part.get("chamfer", 0.0)), 0.0)
+        if fillet > 0.0:
+            return [w, d, h, fillet]
         return [w, d, h]
     if p == "cylinder":
         # 显式三元组 [d1, d2, h] 支持圆台/圆锥

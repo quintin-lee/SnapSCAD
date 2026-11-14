@@ -45,11 +45,26 @@ def _cylinder_code(size: list[float], center: list[float], holes: list[dict], no
 
 def _cube_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
     x, y, z = (float(size[i]) for i in range(3))
+    fillet = float(size[3]) if len(size) >= 4 else 0.0
     cx, cy, cz = (float(center[i]) for i in range(3))
-    lines = [f"  // {note}" if note else "  // cube"]
-    lines.append(f"  translate([{_fmt(cx - x / 2)}, {_fmt(cy - y / 2)}, {_fmt(cz)}])")
-    lines.append(f"    cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z)}], center = false);")
-    return "\n".join(lines)
+
+    # 安全约束：倒圆角半径不能超过半宽或半深
+    fillet = min(fillet, min(x, y) / 2.0 - 0.01) if fillet > 0.0 else 0.0
+
+    if fillet > 1e-4:
+        lines = [f"  // {note} (圆角倒角 r={_fmt(fillet)}mm)" if note else f"  // rounded cube (r={_fmt(fillet)}mm)"]
+        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+        lines.append(f"    linear_extrude(height = {_fmt(z)}) {{")
+        lines.append(f"      offset(r = {_fmt(fillet)}) {{")
+        lines.append(f"        square([{_fmt(x - 2 * fillet)}, {_fmt(y - 2 * fillet)}], center = true);")
+        lines.append("      }")
+        lines.append("    }")
+        return "\n".join(lines)
+    else:
+        lines = [f"  // {note}" if note else "  // cube"]
+        lines.append(f"  translate([{_fmt(cx - x / 2)}, {_fmt(cy - y / 2)}, {_fmt(cz)}])")
+        lines.append(f"    cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z)}], center = false);")
+        return "\n".join(lines)
 
 
 def _capsule_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
