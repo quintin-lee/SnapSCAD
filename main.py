@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     src = p.add_mutually_exclusive_group(required=False)
     src.add_argument("--image", "-i", nargs="+", help="输入图片路径 (支持传入多张多角度照片, 如 -i f.jpg s.jpg)")
     src.add_argument("--describe", "-d", help="文字描述, 无图片场景")
+    src.add_argument("--batch-dir", help="批量生产目录: 自动对目录下的所有图片依次执行建模与汇总")
 
     p.add_argument("--gallery", action="store_true", help="根据输出目录中的全部模型生成 3D 展厅画廊网页 (gallery.html)")
 
@@ -61,10 +62,14 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(log_file="out/agent.log")
 
-    if args.gallery and not args.image and not args.describe:
+    if args.gallery and not args.image and not args.describe and not args.batch_dir:
         gpath = generate_gallery(args.output)
         print(f"✅ 3D 模型展厅画廊已生成: {gpath}")
         return 0
+
+    if not args.image and not args.describe and not args.batch_dir:
+        build_parser().print_help()
+        return 1
 
     config = AgentConfig(
         output_dir=args.output,
@@ -79,6 +84,47 @@ def main(argv: list[str] | None = None) -> int:
 
     agent = OpenscadAgent(config)
     agent.enable_multi_view = not args.no_multi_view
+
+    # 批量生产流水线
+    if args.batch_dir:
+        batch_p = Path(args.batch_dir).resolve()
+        if not batch_p.exists() or not batch_p.is_dir():
+            print(f"❌ 批量目录不存在或不是目录: {batch_p}")
+            return 1
+        img_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        img_files = sorted([f for f in batch_p.iterdir() if f.is_file() and f.suffix.lower() in img_exts])
+        if not img_files:
+            print(f"⚠️ 批量目录中未找到支持的图片文件: {batch_p}")
+            return 1
+
+        print(f"🏭 启动工业化批量生产流水线: 共发现 {len(img_files)} 张待处理图片")
+        print(f"   输入目录: {batch_p}")
+        print(f"   输出目录: {config.output_dir}")
+        print("=" * 60)
+
+        success_count = 0
+        fail_count = 0
+        for idx, img_path in enumerate(img_files, 1):
+            print(f"\n▶ [{idx}/{len(img_files)}] 正在处理: {img_path.name}")
+            try:
+                res = agent.build_from_image(str(img_path), hint=args.hint, review=not args.no_review)
+                if res.success:
+                    success_count += 1
+                    print(f"   ✅ 成功: {res.spec.get('name') if res.spec else img_path.stem} -> {res.model_file}")
+                else:
+                    fail_count += 1
+                    print(f"   ❌ 失败: {'; '.join(res.errors)}")
+            except Exception as e:
+                fail_count += 1
+                print(f"   ❌ 异常: {e}")
+
+        gpath = generate_gallery(args.output)
+        print("\n" + "=" * 60)
+        print(f"🏁 批量流水线处理完成: 成功 {success_count} 个 / 失败 {fail_count} 个 (共 {len(img_files)} 个)")
+        print(f"🏛️ 汇总 3D 展厅画廊已生成: {gpath}")
+        print("=" * 60)
+        return 0 if success_count > 0 else 1
+
     if args.image:
         images: list[str] = []
         for item in args.image:
