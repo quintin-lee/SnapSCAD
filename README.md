@@ -54,6 +54,9 @@
 - **工业标准紧固件沉孔库**：孔洞原生支持 `standard: "M2"~"M8"`，自动转译为符合 ISO/DIN 规范的双阶梯沉头螺栓孔与公差配合。
 - **局域网 3D 打印机一键直发**：GUI 操作栏集成打印机直连推送，原生适配 Klipper (Moonraker) 与 OctoPrint 网络切片直传。
 - **桌面布局持久化记忆**：窗口尺寸、位置与三栏分割比例自动记忆恢复。
+- **3D 立体文字与铭牌浮雕**：支持 `text` 原语，一键生成带字号、对齐与深度的 3D 浮雕与凹槽刻字标牌。
+- **自动化质量基准测试套件**：内置 `test_agent.py`，支持 `main.py --test` 一键全自动化执行 8 大子系统回归自检。
+- **GUI 国际化双语切换**：界面支持简体中文 / English 实时无缝热切，自动持久化语言偏好。
 - **零第三方渲染依赖**：只调用系统 `openscad` 与 `magick` 可执行文件。
 
 ## 依赖
@@ -100,6 +103,9 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 
 # 6) 一键生成或更新 3D 模型展厅画廊
 .venv/bin/python main.py --gallery
+
+# 7) 执行全套自动化质量基准与回归测试
+.venv/bin/python main.py --test
 
 # 查看 LLM 识别用的系统提示词/规格 schema
 .venv/bin/python main.py -i photo.jpg --show-prompt
