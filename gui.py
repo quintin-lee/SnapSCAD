@@ -43,7 +43,7 @@ class BuildWorker(QThread):
     done_signal = pyqtSignal(object)   # AgentResult
     error_signal = pyqtSignal(str)
 
-    def __init__(self, agent: OpenscadAgent, image: Optional[str],
+    def __init__(self, agent: OpenscadAgent, image: Optional[str | list[str]],
                  description: str, hint: str, review: bool = True, parent=None) -> None:
         super().__init__(parent)
         self.agent = agent  # agent 已在主线程构造完成且参数已写入，worker 只读
@@ -54,7 +54,9 @@ class BuildWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.log_signal.emit(f"开始建模: image={self.image or '-'} desc={self.description or '-'} review={self.review}")
+            img_desc = (", ".join(Path(p).name for p in self.image) if isinstance(self.image, (list, tuple))
+                        else (Path(self.image).name if self.image else "-"))
+            self.log_signal.emit(f"开始建模: image={img_desc} desc={self.description or '-'} review={self.review}")
             if self.image:
                 result = self.agent.build_from_image(self.image, hint=self.hint, review=self.review)
             else:
@@ -348,6 +350,10 @@ class MainWindow(QMainWindow):
         self.btn_open_scad.clicked.connect(self.on_open_in_openscad)
         act_bar.addWidget(self.btn_open_scad)
 
+        self.btn_open_web = QPushButton("🌐 网页 3D 查看器")
+        self.btn_open_web.clicked.connect(self.on_open_web_viewer)
+        act_bar.addWidget(self.btn_open_web)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -377,20 +383,32 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def on_pick_image(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择图片", "",
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择图片 (支持多选多角度参考照片)", "",
             "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"
         )
-        if path:
-            self.image_path.setText(path)
-            self.log(f"已选择图片: {path}")
+        if paths:
+            combined = "; ".join(paths)
+            self.image_path.setText(combined)
+            self._last_image = paths[0]
+            self.log(f"已选择 {len(paths)} 张参考图片: {', '.join(Path(p).name for p in paths)}")
+            pm = QPixmap(paths[0])
+            if not pm.isNull():
+                scaled = pm.scaled(
+                    self.lbl_origin.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.lbl_origin.setPixmap(scaled)
+                self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
 
     def on_build(self) -> None:
-        image = self.image_path.text().strip() or None
+        raw_imgs = [p.strip() for p in self.image_path.text().split(";") if p.strip()]
+        image_input = raw_imgs if len(raw_imgs) > 1 else (raw_imgs[0] if raw_imgs else None)
         desc = self.txt_desc.toPlainText().strip()
         hint = self.txt_hint.text().strip()
 
-        if not image and not desc:
+        if not image_input and not desc:
             QMessageBox.warning(self, "缺少输入", "请选择图片或输入文字描述。")
             return
 
@@ -425,14 +443,14 @@ class MainWindow(QMainWindow):
         agent.max_fix_rounds = self.spn_fix_rounds.value()
         agent.max_review_rounds = self.spn_review_rounds.value()
         agent.enable_multi_view = self.chk_review.isChecked()  # 审查开启时才做多视角
-        review = self.chk_review.isChecked() and bool(image)  # 仅图片场景可审查（需原图比对）
-        self._worker = BuildWorker(agent, image, desc, hint, review=review, parent=self)
+        review = self.chk_review.isChecked() and bool(image_input)  # 仅图片场景可审查（需原图比对）
+        self._worker = BuildWorker(agent, image_input, desc, hint, review=review, parent=self)
         self._worker.log_signal.connect(self.log)
         self._worker.done_signal.connect(self.on_done)
         self._worker.error_signal.connect(self.on_error)
 
         # 保存本次原图供对比展示，并清空旧预览
-        self._last_image = image
+        self._last_image = raw_imgs[0] if raw_imgs else None
         self._last_desc = desc
         self._clear_compare()
 
@@ -528,6 +546,24 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_dir)))
         self.log(f"已打开输出目录: {out_dir}")
 
+    def on_open_web_viewer(self) -> None:
+        """用系统默认浏览器打开便携式 3D 网页查看器。"""
+        if self._scad_path:
+            p = Path(self._scad_path)
+            html = p.with_name(f"{p.stem}_viewer.html")
+            if html.exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(html)))
+                self.log(f"已在浏览器中打开 3D 查看器: {html.name}")
+                return
+        out_dir = Path(self.txt_outdir.text().strip() or "out")
+        viewers = sorted(out_dir.glob("*_viewer.html"))
+        if viewers:
+            html = viewers[-1]
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(html)))
+            self.log(f"已在浏览器中打开 3D 查看器: {html.name}")
+            return
+        QMessageBox.information(self, "提示", "尚未生成 3D 网页查看器。导出 STL 3D模型时将自动配套生成。")
+
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
         fpath = item.data(Qt.ItemDataRole.UserRole)
@@ -547,6 +583,8 @@ class MainWindow(QMainWindow):
                 self.log(f"已载入文件内容: {p.name}")
             except Exception as e:
                 self.log(f"无法读取文件 {p.name}: {e}")
+        elif suffix == ".html":
+            self.log(f"3D 网页交互查看器: {p.name} (双击直接在浏览器中交互检视)")
 
     def on_file_double_clicked(self, item: QListWidgetItem) -> None:
         """双击文件列表项调起系统默认程序打开。"""
@@ -566,26 +604,30 @@ class MainWindow(QMainWindow):
         super().dragEnterEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        """释放拖入的图片：自动填入路径并立即刷新原图展示。"""
+        """释放拖入的图片：自动填入路径（支持多图多选）并立即刷新原图展示。"""
+        img_paths = []
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 fpath = url.toLocalFile()
                 ext = Path(fpath).suffix.lower()
                 if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"):
-                    self.image_path.setText(fpath)
-                    self._last_image = fpath
-                    self.log(f"已拖入图片: {fpath}")
-                    pm = QPixmap(fpath)
-                    if not pm.isNull():
-                        scaled = pm.scaled(
-                            self.lbl_origin.size(),
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation,
-                        )
-                        self.lbl_origin.setPixmap(scaled)
-                        self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
-                    event.acceptProposedAction()
-                    return
+                    img_paths.append(fpath)
+        if img_paths:
+            combined = "; ".join(img_paths)
+            self.image_path.setText(combined)
+            self._last_image = img_paths[0]
+            self.log(f"已拖入 {len(img_paths)} 张参考图片: {', '.join(Path(p).name for p in img_paths)}")
+            pm = QPixmap(img_paths[0])
+            if not pm.isNull():
+                scaled = pm.scaled(
+                    self.lbl_origin.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.lbl_origin.setPixmap(scaled)
+                self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+            event.acceptProposedAction()
+            return
         super().dropEvent(event)
 
     def on_rerender_scad(self) -> None:
@@ -717,7 +759,7 @@ class MainWindow(QMainWindow):
             return
         for f in sorted(out_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in (
-                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json"
+                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json", ".html"
             ):
                 item = QListWidgetItem(f.name)
                 item.setData(Qt.ItemDataRole.UserRole, str(f))
