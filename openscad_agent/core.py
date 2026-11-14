@@ -112,18 +112,33 @@ class AgentConfig:
         return self._PRECISION_MAP.get(self.render_precision, ("off", 64))[1]
 
     @property
+    def is_local_endpoint(self) -> bool:
+        """是否为本地离线端点（如 Ollama / vLLM / LocalAI）。"""
+        u = (self.base_url or "").lower()
+        return any(h in u for h in ("localhost", "127.0.0.1", "0.0.0.0", ":11434"))
+
+    @property
     def api_key(self) -> Optional[str]:
-        for var in ("AGNES_API_KEY", "AGNES_API_TOKEN", "APIHUB_AGNES_API_KEY"):
+        if self.is_local_endpoint:
+            return "ollama-local"
+        for var in (
+            "AGNES_API_KEY", "AGNES_API_TOKEN", "APIHUB_AGNES_API_KEY",
+            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY",
+            "SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY",
+        ):
             key = os.environ.get(var)
             if key:
                 return key
         return None
 
     def require_api_key(self) -> str:
+        if self.is_local_endpoint:
+            return "ollama-local"
         key = self.api_key
         if not key:
             raise RuntimeError(
-                "缺少 Agnes API key。请设置环境变量 AGNES_API_KEY（或 AGNES_API_TOKEN / APIHUB_AGNES_API_KEY）"
+                "缺少 API Key。请设置环境变量 AGNES_API_KEY（或 OPENAI_API_KEY / DEEPSEEK_API_KEY）\n"
+                "若使用本地离线模型（Ollama/vLLM），请将 Base URL 设为 http://localhost:11434/v1 免 Key 运行。"
             )
         return key
 

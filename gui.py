@@ -219,8 +219,23 @@ class MainWindow(QMainWindow):
         lay.addWidget(mode_box)
 
         # 参数
-        param_box = QGroupBox("参数")
+        param_box = QGroupBox("参数与模型提供商")
         param_lay = QVBoxLayout(param_box)
+
+        # Provider 预设切换
+        row_prov = QHBoxLayout()
+        row_prov.addWidget(QLabel("服务商"))
+        self.cmb_provider = QComboBox()
+        self.cmb_provider.addItems([
+            "Agnes AI (默认云端)",
+            "OpenAI (官方接口)",
+            "DeepSeek (官方接口)",
+            "本地 Ollama (完全离线免Key)",
+            "自定义端点",
+        ])
+        self.cmb_provider.currentIndexChanged.connect(self.on_provider_changed)
+        row_prov.addWidget(self.cmb_provider, stretch=1)
+        param_lay.addLayout(row_prov)
 
         # 模型 & API
         row_model = QHBoxLayout()
@@ -478,6 +493,23 @@ class MainWindow(QMainWindow):
             self.txt_hint.setText(hint)
             self.log(f"已载入预设范例: {title}")
 
+    def on_provider_changed(self, index: int) -> None:
+        """快速切换主流大模型服务商配置或本地离线 Ollama。"""
+        choice = self.cmb_provider.currentText()
+        if "Agnes" in choice:
+            self.txt_base_url.setText("https://apihub.agnes-ai.com")
+            self.txt_model.setText("agnes-3.0-flash")
+        elif "OpenAI" in choice:
+            self.txt_base_url.setText("https://api.openai.com/v1")
+            self.txt_model.setText("gpt-4o")
+        elif "DeepSeek" in choice:
+            self.txt_base_url.setText("https://api.deepseek.com")
+            self.txt_model.setText("deepseek-chat")
+        elif "Ollama" in choice:
+            self.txt_base_url.setText("http://localhost:11434/v1")
+            self.txt_model.setText("qwen2.5-coder:latest")
+            self.log("已切换至本地 Ollama 离线模式 (无需 API Key)")
+
     def on_paste_clipboard(self) -> None:
         """从系统剪贴板获取截图并载入。"""
         cb = QApplication.clipboard()
@@ -557,12 +589,12 @@ class MainWindow(QMainWindow):
             image_max_side=self.spn_max_side.value(),
         )
         # 把审查/修复轮数写入 agent
-        config_api_key = config.api_key
-        if not config_api_key:
+        if not config.api_key and not config.is_local_endpoint:
             QMessageBox.warning(
                 self, "缺少 API Key",
-                "未检测到 Agnes API key。\n"
-                "请设置环境变量 AGNES_API_KEY 后重启本程序。",
+                "未检测到 API Key。\n"
+                "请设置环境变量 AGNES_API_KEY（或 OPENAI_API_KEY / DEEPSEEK_API_KEY）。\n"
+                "若使用本地模型，请将服务商切换为「本地 Ollama (完全离线免Key)」。",
             )
             return
 
