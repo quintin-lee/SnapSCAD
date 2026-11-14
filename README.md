@@ -104,14 +104,15 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 
 | 文件 | 职责 |
 | --- | --- |
-| `openscad_agent/core.py` | 配置、OpenSCAD 渲染器（多视角/精度控制）、图片预处理 |
-| `openscad_agent/spec.py` | 规格校验与规范化层（类型净化/缺省补全/原语别名） |
-| `openscad_agent/geometry.py` | 规格 → OpenSCAD 源码转译（支持 rotation / polyhedron 真顶点） |
-| `openscad_agent/vision.py` | Agnes 视觉 API 客户端 + 渲染图多视角审查闭环 |
-| `openscad_agent/agent.py` | 全流程编排 + 编译修复 + 审查闭环（回归保护/得分回退） |
+| `openscad_agent/core.py` | 配置、OpenSCAD 渲染器（多视角/精度控制/binstl）、图片预处理、3D网页查看器 |
+| `openscad_agent/spec.py` | 规格校验与规范化层（类型净化/缺省补全/原语别名/锥台） |
+| `openscad_agent/doctor.py` | 3D 打印适印性自检系统（壁厚/微孔/细长比/热床尺寸诊断） |
+| `openscad_agent/geometry.py` | 规格 → OpenSCAD 源码转译（支持 rotation/capsule/mirror/接地Z=0） |
+| `openscad_agent/vision.py` | Agnes 视觉 API 客户端 + 连续会话审查闭环 + Few-Shot 提示词 |
+| `openscad_agent/agent.py` | 全流程编排 + 编译修复 + 会话链审查闭环 + 多图联合输入 |
 | `openscad_agent/log.py` | 统一日志系统（控制台 + `out/agent.log` 文件落盘） |
-| `main.py` | CLI 入口 |
-| `gui.py` | PyQt6 图形界面（原图 vs 预览并排、参数持久化） |
+| `main.py` | CLI 入口（支持多图、格式选择、适印性报告） |
+| `gui.py` | PyQt6 图形界面（多图拖拽、剪贴板截图、预设库、在线微调） |
 
 ## 规格 JSON 结构
 
