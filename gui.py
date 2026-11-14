@@ -13,12 +13,13 @@ UI 不卡顿；结果通过 pyqtSignal 回传主线程更新。
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings
-from PyQt6.QtGui import QPixmap, QFont, QColor
+from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings, QUrl
+from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QGroupBox,
@@ -83,6 +84,7 @@ class MainWindow(QMainWindow):
         self._scad_path: Optional[str] = None
         self._last_image: Optional[str] = None
         self._last_desc: str = ""
+        self._current_preview_png: Optional[str] = None
         self._settings = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
         self._build_ui()
         self._load_settings()
@@ -287,6 +289,25 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(4, 4, 4, 4)
 
         lay.addWidget(QLabel("<b>原图 vs 预览对比</b>", wordWrap=True))
+
+        # 视角切换按钮组
+        view_bar = QHBoxLayout()
+        view_bar.addWidget(QLabel("视角:"))
+        self.btn_view_persp = QPushButton("透视 (主)")
+        self.btn_view_top = QPushButton("俯视")
+        self.btn_view_front = QPushButton("正视")
+        self.btn_view_iso = QPushButton("等轴测")
+        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso):
+            btn.setFixedHeight(26)
+            view_bar.addWidget(btn)
+        view_bar.addStretch(1)
+        lay.addLayout(view_bar)
+
+        self.btn_view_persp.clicked.connect(lambda: self.on_switch_view("perspective"))
+        self.btn_view_top.clicked.connect(lambda: self.on_switch_view("top"))
+        self.btn_view_front.clicked.connect(lambda: self.on_switch_view("front"))
+        self.btn_view_iso.clicked.connect(lambda: self.on_switch_view("iso"))
+
         # 原图 | 预览图 并排
         cmp_split = QSplitter(Qt.Orientation.Horizontal)
 
@@ -307,8 +328,22 @@ class MainWindow(QMainWindow):
         cmp_split.setSizes([260, 260])
         lay.addWidget(cmp_split, stretch=2)
 
-        lay.addWidget(QLabel("<b>输出文件</b>", wordWrap=True))
+        # 快捷操作栏
+        act_bar = QHBoxLayout()
+        self.btn_open_scad = QPushButton("🚀 在 OpenSCAD 中打开 3D 模型")
+        self.btn_open_scad.setStyleSheet("font-weight: bold; padding: 4px 8px;")
+        self.btn_open_scad.clicked.connect(self.on_open_in_openscad)
+        act_bar.addWidget(self.btn_open_scad)
+
+        self.btn_open_dir = QPushButton("📁 打开输出目录")
+        self.btn_open_dir.clicked.connect(self.on_open_output_dir)
+        act_bar.addWidget(self.btn_open_dir)
+        lay.addLayout(act_bar)
+
+        lay.addWidget(QLabel("<b>输出文件 (单击预览 / 双击打开)</b>", wordWrap=True))
         self.lst_files = QListWidget()
+        self.lst_files.itemClicked.connect(self.on_file_clicked)
+        self.lst_files.itemDoubleClicked.connect(self.on_file_double_clicked)
         lay.addWidget(self.lst_files, stretch=1)
         return w
 
@@ -413,6 +448,7 @@ class MainWindow(QMainWindow):
         if result.model_file:
             self._refresh_file_list(Path(result.model_file).parent)
         if result.preview_png and Path(result.preview_png).exists():
+            self._current_preview_png = result.preview_png
             self._show_preview(result.preview_png, origin_image=self._last_image)
 
         if result.success:
@@ -438,6 +474,73 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.lbl_status.setText("错误")
         self.log(f"❌ 错误: {msg}")
+
+    def on_switch_view(self, view_name: str) -> None:
+        """切换预览视角显示。"""
+        if not self._current_preview_png:
+            self.log("提示: 尚未渲染预览图")
+            return
+        p = Path(self._current_preview_png)
+        # 查找对应视角图片 (例如 xxx_preview_v_top.png)
+        candidates = []
+        if view_name == "perspective":
+            candidates = [p, p.with_name(f"{p.stem}_v_perspective.png")]
+        else:
+            candidates = [
+                p.with_name(f"{p.stem}_v_{view_name}.png"),
+                p.with_name(f"{p.stem}_{view_name}.png"),
+            ]
+        for c in candidates:
+            if c.exists():
+                self._show_preview(str(c), origin_image=self._last_image)
+                self.log(f"已切换预览视角: {view_name} -> {c.name}")
+                return
+        self.log(f"提示: 未找到 {view_name} 视角图（可能未渲染多视角）")
+
+    def on_open_in_openscad(self) -> None:
+        """后台拉起 OpenSCAD 检视当前 .scad 源码。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成 OpenSCAD 文件。请先完成一次建模。")
+            return
+        try:
+            subprocess.Popen(["openscad", self._scad_path])
+            self.log(f"已在 OpenSCAD 中打开: {self._scad_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "无法启动 OpenSCAD", f"启动 OpenSCAD 失败: {e}\n请确认已安装 openscad。")
+
+    def on_open_output_dir(self) -> None:
+        """用系统文件管理器打开输出目录。"""
+        out_dir = Path(self.txt_outdir.text().strip() or "out").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_dir)))
+        self.log(f"已打开输出目录: {out_dir}")
+
+    def on_file_clicked(self, item: QListWidgetItem) -> None:
+        """单击文件列表项预览内容。"""
+        fpath = item.data(Qt.ItemDataRole.UserRole)
+        if not fpath:
+            return
+        p = Path(fpath)
+        if not p.exists():
+            return
+        suffix = p.suffix.lower()
+        if suffix in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+            self._show_preview(str(p), origin_image=self._last_image)
+            self.log(f"查看图片: {p.name}")
+        elif suffix in (".scad", ".json", ".log"):
+            try:
+                txt = p.read_text(encoding="utf-8")
+                self.txt_scad.setPlainText(txt)
+                self.log(f"已载入文件内容: {p.name}")
+            except Exception as e:
+                self.log(f"无法读取文件 {p.name}: {e}")
+
+    def on_file_double_clicked(self, item: QListWidgetItem) -> None:
+        """双击文件列表项调起系统默认程序打开。"""
+        fpath = item.data(Qt.ItemDataRole.UserRole)
+        if fpath and Path(fpath).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(fpath)))
+            self.log(f"调用系统默认程序打开: {Path(fpath).name}")
 
     # ------------------------------------------------------------------
     # UI 辅助
