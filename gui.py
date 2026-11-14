@@ -399,6 +399,10 @@ class MainWindow(QMainWindow):
         self.btn_gallery.clicked.connect(self.on_open_gallery)
         act_bar.addWidget(self.btn_gallery)
 
+        self.btn_export_dxf = QPushButton("📐 激光切割 DXF")
+        self.btn_export_dxf.clicked.connect(self.on_export_dxf)
+        act_bar.addWidget(self.btn_export_dxf)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -722,6 +726,24 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(gpath)))
         self.log(f"🏛️ 3D 模型展厅画廊已生成并在浏览器中打开: {gpath.name}")
 
+    def on_export_dxf(self) -> None:
+        """为当前模型导出 2D 激光切割/CNC DXF 与 SVG 投影轮廓。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成 OpenSCAD 文件。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        out_dxf = scad_p.with_suffix(".dxf")
+        out_svg = scad_p.with_suffix(".svg")
+        config = AgentConfig(output_dir=str(scad_p.parent))
+        renderer = OpenscadRenderer(config)
+        try:
+            renderer.export_2d_projection(scad_p, out_dxf, cut=False)
+            renderer.export_2d_projection(scad_p, out_svg, cut=False)
+            self.log(f"📐 激光切割/CNC 轮廓导出成功:\n   DXF: {out_dxf.name}\n   SVG: {out_svg.name}")
+            self._refresh_file_list(scad_p.parent)
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", f"2D 投影导出异常: {e}")
+
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
         fpath = item.data(Qt.ItemDataRole.UserRole)
@@ -1017,7 +1039,7 @@ class MainWindow(QMainWindow):
             return
         for f in sorted(out_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in (
-                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json", ".html"
+                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json", ".html", ".dxf", ".svg"
             ):
                 item = QListWidgetItem(f.name)
                 item.setData(Qt.ItemDataRole.UserRole, str(f))

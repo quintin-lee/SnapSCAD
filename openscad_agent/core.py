@@ -140,7 +140,7 @@ class OpenscadRenderer:
       openscad --render -o preview.png model.scad  # 渲染 2D 预览
     """
 
-    FORMATS = {"stl", "obj", "3mf", "csg", "bmp", "png", "amf"}
+    FORMATS = {"stl", "obj", "3mf", "csg", "bmp", "png", "amf", "dxf", "svg"}
 
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
@@ -290,6 +290,54 @@ class OpenscadRenderer:
         if ok:
             return True, "语法与编译检查通过"
         return False, msg[-2000:]
+
+    def export_2d_projection(self, scad_path: Path, out_2d: Path, cut: bool = False) -> Path:
+        """导出 2D 激光切割/CNC 轮廓投影 (dxf 或 svg)。
+
+        cut = False: 全模型正投影 (俯视外轮廓)
+        cut = True:  Z=0 水平面横剖切截面轮廓
+        """
+        fmt = out_2d.suffix.lstrip(".").lower()
+        if fmt not in ("dxf", "svg"):
+            raise ValueError(f"2D 投影仅支持 dxf 或 svg，传入为: {fmt}")
+        out_2d.parent.mkdir(parents=True, exist_ok=True)
+
+        root_module = _extract_root_module(scad_path)
+        cut_str = "true" if cut else "false"
+        wrapper = scad_path.parent / f"_proj_tmp_{scad_path.stem}.scad"
+        content = f"use <{scad_path.resolve()}>\nprojection(cut = {cut_str}) {root_module}();\n"
+        wrapper.write_text(content, encoding="utf-8")
+        try:
+            cmd = self._base_cmd() + [
+                "-o", str(out_2d),
+                str(wrapper),
+            ]
+            code, out, err = run_cmd(cmd)
+            if code != 0:
+                raise RuntimeError(f"OpenSCAD 2D 投影导出失败: {err or out}")
+            _log.info("[render] 已导出 2D 激光切割/CNC 轮廓 (%s): %s", fmt.upper(), out_2d)
+            return out_2d
+        finally:
+            try:
+                wrapper.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _extract_root_module(scad_path: Path) -> str:
+    """从 .scad 文件末尾提取顶层入口模块名。"""
+    try:
+        lines = scad_path.read_text(encoding="utf-8").splitlines()
+        for l in reversed(lines):
+            s = l.strip()
+            if s.endswith("();"):
+                call = s.rstrip("();").strip()
+                parts = call.split()
+                if parts:
+                    return parts[-1]
+    except Exception:
+        pass
+    return scad_path.stem
 
 
 # ---------------------------------------------------------------------------
