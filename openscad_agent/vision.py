@@ -21,8 +21,157 @@ from .core import AgentConfig, SPEC_SCHEMA
 from .log import get_logger as _log_module
 _log = _log_module()
 
-VISION_PROMPT = f"""\
-你是一位资深 3D CAD 工程师 + 逆向工程专家。用户会给你一张产品/零件/物体的照片，
+FEW_SHOT_EXAMPLES = {
+    "mechanical": """\
+{
+  "name": "flange_mount",
+  "description": "带均布沉孔与中心凸台的圆形法兰座",
+  "units": "mm",
+  "params": {"flange_dia": 60, "boss_dia": 30, "hole_dia": 10},
+  "parts": [
+    {
+      "id": "base_flange",
+      "primitive": "cylinder",
+      "size": [60, 6],
+      "center": [0, 0, 0],
+      "color": "dimgray",
+      "holes": [
+        {"primitive": "cylinder", "size": [10, 6], "center": [0, 0, 0]},
+        {"primitive": "cylinder", "size": [4, 6], "radial_array": {"count": 4, "radius": 22}}
+      ]
+    },
+    {
+      "id": "center_boss",
+      "primitive": "cylinder",
+      "size": [30, 20],
+      "center": [0, 0, 6],
+      "color": "silver",
+      "holes": [{"primitive": "cylinder", "size": [10, 20], "center": [0, 0, 6]}]
+    }
+  ],
+  "assembly": {"union_parts": ["base_flange", "center_boss"]}
+}""",
+    "revolve": """\
+{
+  "name": "minimal_vase",
+  "description": "极简流线型回转体花瓶",
+  "units": "mm",
+  "parts": [
+    {
+      "id": "vase_body",
+      "primitive": "rotate_extrude",
+      "angle": 360,
+      "polygon": [[12, 0], [20, 0], [25, 20], [15, 35], [20, 50], [16, 50], [12, 25]],
+      "center": [0, 0, 0],
+      "color": "mediumpurple"
+    }
+  ],
+  "assembly": {"union_parts": ["vase_body"]}
+}""",
+    "architecture": """\
+{
+  "name": "hexagonal_pavilion",
+  "description": "东方古典六角亭",
+  "units": "mm",
+  "parts": [
+    {
+      "id": "base_platform",
+      "primitive": "cylinder",
+      "r1": 35,
+      "r2": 35,
+      "height": 5,
+      "center": [0, 0, 0],
+      "color": "dimgray"
+    },
+    {
+      "id": "pillar_ring",
+      "primitive": "cylinder",
+      "radius": 2,
+      "height": 30,
+      "center": [0, 0, 5],
+      "color": "darkred",
+      "radial_array": {"count": 6, "radius": 26}
+    },
+    {
+      "id": "spire_roof",
+      "primitive": "cylinder",
+      "r1": 38,
+      "r2": 0,
+      "height": 22,
+      "center": [0, 0, 35],
+      "color": "gold"
+    }
+  ],
+  "assembly": {"union_parts": ["base_platform", "pillar_ring", "spire_roof"]}
+}""",
+    "electronics": """\
+{
+  "name": "enclosure_case",
+  "description": "带接口开口的电子设备下壳",
+  "units": "mm",
+  "parts": [
+    {
+      "id": "bottom_case",
+      "primitive": "cube",
+      "size": [80, 50, 20],
+      "center": [0, 0, 0],
+      "color": "steelblue",
+      "holes": [
+        {"primitive": "cube", "size": [76, 46, 18], "center": [0, 0, 2]},
+        {"primitive": "cube", "size": [12, 10, 6], "center": [40, 0, 6]}
+      ]
+    }
+  ],
+  "assembly": {"union_parts": ["bottom_case"]}
+}""",
+    "organic": """\
+{
+  "name": "robotic_gripper",
+  "description": "带双侧对称夹爪的连杆支架",
+  "units": "mm",
+  "parts": [
+    {
+      "id": "central_link",
+      "primitive": "capsule",
+      "radius": 4,
+      "height": 25,
+      "center": [0, 0, 0],
+      "color": "darkorange"
+    },
+    {
+      "id": "symmetric_claw",
+      "primitive": "cube",
+      "size": [18, 5, 4],
+      "center": [12, 0, 15],
+      "symmetric": true,
+      "color": "silver"
+    }
+  ],
+  "assembly": {"union_parts": ["central_link", "symmetric_claw"]}
+}"""
+}
+
+
+def select_few_shot_domain(text: str) -> str:
+    """根据输入文本自动匹配最贴合的 Few-Shot 逆向领域范例。"""
+    t = text.lower()
+    if any(k in t for k in ("花瓶", "瓶", "杯", "罐", "滑轮", "圆环", "碗", "vase", "bottle", "cup", "pulley", "revolve", "lathe")):
+        return "revolve"
+    if any(k in t for k in ("建筑", "亭", "楼", "塔", "城", "屋", "房", "castle", "tower", "building", "house", "pavilion", "city")):
+        return "architecture"
+    if any(k in t for k in ("外壳", "盒", "壳", "底座", "固定座", "支架", "case", "enclosure", "housing", "stand", "bracket")):
+        return "electronics"
+    if any(k in t for k in ("翅膀", "手臂", "对称", "生物", "连杆", "wing", "arm", "symmetry", "capsule", "gripper")):
+        return "organic"
+    return "mechanical"
+
+
+def build_vision_prompt(context_text: str = "") -> str:
+    """动态拼装包含领域特定 Few-Shot 范例的系统提示词。"""
+    domain = select_few_shot_domain(context_text)
+    example = FEW_SHOT_EXAMPLES.get(domain, FEW_SHOT_EXAMPLES["mechanical"])
+    return f"""\
+你是一位资深 3D CAD 工程师 + 逆向工程专家。用户会给你产品/零件/物体的参考照片或需求，
 请仔细分析其几何结构，并输出一个可直接驱动 OpenSCAD 建模的 JSON 规格。
 
 要求：
@@ -31,40 +180,17 @@ VISION_PROMPT = f"""\
 {SPEC_SCHEMA}
 
 2. 几何判断原则：
-   - 优先用最简单的 CSG 原语表达：方块/圆柱/球/多面体 + union/difference/translate/rotate。
+   - 优先用最简单的 CSG 原语与高级特征表达：方块/圆柱/圆锥/球/胶囊/多面体/2D拉伸/2D回转 + 阵列(array)/镜像(symmetric)/union/difference。
    - 尺寸以毫米(mm)为单位，给出合理工程估计（例如手机壳约 150x75x8mm）。
    - 孔、凹槽、切角等"减去"的特征放入对应 part 的 holes。
    - 装配关系写入 assembly 字段。
-3. 对于无法用简单原语精确表达的曲面特征，用 polyhedron 近似或退化为
-   圆柱/球近似，并在 part.note 中说明近似方式。
+3. 对于无法用简单原语精确表达的曲面特征，用 polyhedron/linear_extrude 近似，并在 part.note 中说明近似方式。
 4. 若图片模糊或无法判断，请给出最合理的假设并全部记录在 description 与 print_tips 中。
-5. 参考逆向分解范例（示范接地对齐、同心圆孔与语义着色）：
-{{
-  "name": "flange_mount",
-  "description": "带沉孔的圆形法兰安装座",
-  "units": "mm",
-  "params": {{"flange_dia": 60, "boss_dia": 30, "hole_dia": 10}},
-  "parts": [
-    {{
-      "id": "base_flange",
-      "primitive": "cylinder",
-      "size": [60, 6],
-      "center": [0, 0, 0],
-      "color": "dimgray",
-      "holes": [{{"primitive": "cylinder", "size": [10, 6], "center": [0, 0, 0]}}]
-    }},
-    {{
-      "id": "center_boss",
-      "primitive": "cylinder",
-      "size": [30, 20],
-      "center": [0, 0, 6],
-      "color": "silver",
-      "holes": [{{"primitive": "cylinder", "size": [10, 20], "center": [0, 0, 6]}}]
-    }}
-  ],
-  "assembly": {{"union_parts": ["base_flange", "center_boss"]}}
-}}
+5. 参考逆向分解范例（针对当前领域 [{domain}]，示范接地对齐、阵列与语义着色）：
+{example}
 """
+
+VISION_PROMPT = build_vision_prompt()
 
 
 class SpecParseError(RuntimeError):
@@ -92,9 +218,10 @@ class AgnesVision:
         return f"data:{mime};base64,{b64}"
 
     def describe_from_text(self, description: str) -> dict[str, Any]:
-        """无图片场景：仅凭文字描述建模。"""
+        """无图片场景：仅凭文字描述建模（自适应注入领域 Few-Shot 范例）。"""
+        system = build_vision_prompt(description) + self.config.extra_system
         messages = [
-            {"role": "system", "content": VISION_PROMPT + self.config.extra_system},
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": f"请根据以下文字描述生成 OpenSCAD 模型规格 JSON：\n{description}",
@@ -110,7 +237,8 @@ class AgnesVision:
         若接口拒绝多模态格式，则降级为纯文本请求。
         """
         paths = [Path(p) for p in (image_path if isinstance(image_path, (list, tuple)) else [image_path])]
-        system = VISION_PROMPT + self.config.extra_system
+        context_text = f"{user_hint} {' '.join(p.stem for p in paths)}"
+        system = build_vision_prompt(context_text) + self.config.extra_system
 
         multimodal: list[dict[str, Any]] = [
             {"type": "text", "text": "请仔细分析以下提供的图片（多角度参考），综合交叉比对输出 OpenSCAD 模型规格 JSON。"},
