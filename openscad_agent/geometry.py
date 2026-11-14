@@ -287,8 +287,12 @@ def _normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
     return _normalize_size(prim, hole)
 
 
-def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None) -> str:
-    """规格 dict → 完整 OpenSCAD 源码字符串。"""
+def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None, fn: int = 0) -> str:
+    """规格 dict → 完整 OpenSCAD 源码字符串。
+
+    fn: 圆柱/球体分段精度 ($fn)；0 表示不注入（使用 OpenSCAD 默认）。
+    非 0 时在文件头注入 $fn=..., 控制曲面体平滑度。
+    """
     model_name = spec.get("name", "model")
     safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in model_name)
     description = spec.get("description", "")
@@ -302,6 +306,8 @@ def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None) -> str
     out.append(f"// {model_name} - {description}")
     out.append(f"// 由 OpenSCAD Agent 自动生成: 图片识别 -> 3D 模型")
     out.append(f"// 单位: mm | 生成时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if fn:
+        out.append(f"$fn = {fn};  // 圆柱/球体分段精度")
     if params:
         out.append(f"// params: {json.dumps(params, ensure_ascii=False)}")
     out.append(f"// ============================================================")
@@ -387,7 +393,7 @@ def write_spec_and_scad(
     spec_path = out_dir / f"{safe}_spec.json"
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    scad_src = spec_to_scad(spec, config)
+    scad_src = spec_to_scad(spec, config, fn=config.fn_value() if config else 0)
     scad_path = out_dir / f"{safe}.scad"
     scad_path.write_text(scad_src, encoding="utf-8")
     from openscad_agent.log import get_logger

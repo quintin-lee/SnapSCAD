@@ -92,6 +92,21 @@ class AgentConfig:
         except FileNotFoundError:
             self.openscad_bin = "openscad"  # 延迟到渲染时再报错
 
+    #: render_precision → (--preview 模式, $fn 平滑度)
+    _PRECISION_MAP = {
+        "Fast":  ("thrown-together", 24),
+        "Slow":  ("off", 32),
+        "High":  ("off", 64),
+    }
+
+    def preview_mode(self) -> str:
+        """当前精度的 --preview 模式（Fast=快预览, 其他=完整求值）。"""
+        return self._PRECISION_MAP.get(self.render_precision, ("off", 64))[0]
+
+    def fn_value(self) -> int:
+        """当前精度的 $fn（圆柱/球体分段数）。"""
+        return self._PRECISION_MAP.get(self.render_precision, ("off", 64))[1]
+
     @property
     def api_key(self) -> Optional[str]:
         for var in ("AGNES_API_KEY", "AGNES_API_TOKEN", "APIHUB_AGNES_API_KEY"):
@@ -129,6 +144,10 @@ class OpenscadRenderer:
 
     def _base_cmd(self) -> list[str]:
         return [self.openscad]
+
+    def _preview_arg(self) -> list[str]:
+        """根据 render_precision 返回 --preview 参数（Fast=快预览, 其他=完整求值）。"""
+        return [f"--preview={self.config.preview_mode()}"]
 
     def export_model(self, scad_path: Path, out_path: Path) -> Path:
         """导出 3D 模型（stl/obj/3mf）。"""
@@ -175,6 +194,7 @@ class OpenscadRenderer:
         base = self._base_cmd() + [
             "--autocenter", "--viewall",
             f"--imgsize={size[0]},{size[1]}",
+            *self._preview_arg(),
             "-o", str(out_png), str(scad_path),
         ]
         # 视角参数（OpenSCAD --view 可选值: axes/crosshairs/edges/scales/wireframe；
