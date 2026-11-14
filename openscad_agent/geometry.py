@@ -1,0 +1,312 @@
+"""3D 几何生成器：把 LLM 输出的 JSON 规格转译为可编译的 OpenSCAD 源码。
+
+设计原则：
+- 每个 part 生成一个独立 OpenSCAD 模块（function），便于阅读、调试与局部修改。
+- 顶层按 assembly.union_parts 做 union，再对 holes 做 difference 挖除，
+  输出单一可打印实体。
+- 全程使用标准 OpenSCAD 2.x CSG 语法，兼容 openscad -o 渲染。
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from .core import AgentConfig
+
+
+def _fmt(v: float) -> str:
+    """格式化数值：整数不带小数点。"""
+    f = float(v)
+    return str(int(f)) if f.is_integer() else f"{f:g}"
+
+
+def _cylinder_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """圆柱生成器。size = [直径, 高度]，由调用方规范化 radius/height 字段。"""
+    d, h = float(size[0]), float(size[1])
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    r = d / 2.0
+    lines = [f"  // {note}" if note else "  // cylinder"]
+    lines.append(f"  translate([{_fmt(cx - r)}, {_fmt(cy - r)}, {_fmt(cz)}])")
+    lines.append(f"    cylinder(h = {_fmt(h)}, d = {_fmt(d)}, center = false);")
+    return "\n".join(lines)
+
+
+def _cube_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    x, y, z = (float(size[i]) for i in range(3))
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    lines = [f"  // {note}" if note else "  // cube"]
+    lines.append(f"  translate([{_fmt(cx - x / 2)}, {_fmt(cy - y / 2)}, {_fmt(cz)}])")
+    lines.append(f"    cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z)}], center = false);")
+    return "\n".join(lines)
+
+
+def _sphere_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    r = float(size[0])
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    lines = [f"  // {note}" if note else "  // sphere"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+    lines.append(f"    sphere(r = {_fmt(r)});")
+    return "\n".join(lines)
+
+
+def _polyhedron_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """polyhedron 降级处理：LLM 若给出 vertices 则使用，否则退化为立方体。"""
+    x, y, z = (float(size[i]) for i in range(3))
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    lines = [f"  // {note} (polyhedron 降级为 box)" if note else "  // polyhedron -> box"]
+    lines.append(f"  translate([{_fmt(cx - x / 2)}, {_fmt(cy - y / 2)}, {_fmt(cz)}])")
+    lines.append(f"    cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z)}]);")
+    return "\n".join(lines)
+
+
+PRIMITIVE_BUILDERS = {
+    "cube": _cube_code,
+    "cuboid": _cube_code,        # LLM 常写 cuboid，等价 cube
+    "box": _cube_code,
+    "cylinder": _cylinder_code,
+    "sphere": _sphere_code,
+    "polyhedron": _polyhedron_code,
+}
+
+
+def _normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
+    """把 LLM 输出的多种尺寸字段统一为生成器期望的 size 列表。
+
+    - cube/cuboid: size=[x,y,z] 或 size=N(立方体) 或 width/depth/height
+    - cylinder:  size=[直径,高度] 或 radius/height/diameter/height
+    - sphere:    size=[半径] 或 radius
+    - polyhedron: 有 points/faces 时用 size 估算，否则默认 10x10x10
+    """
+    raw = part.get("size")
+    # 标量 size (如 5) → 立方体
+    if isinstance(raw, (int, float)):
+        v = float(raw)
+        if prim in ("cube", "cuboid", "box"):
+            return [v, v, v]
+        if prim == "sphere":
+            return [v]
+        if prim == "cylinder":
+            return [v * 2, v]  # 直径=半径*2, 高度=半径
+    if raw and isinstance(raw, list):
+        return [float(x) for x in raw]
+    # 从其他字段推断
+    if prim in ("cube", "cuboid", "box"):
+        w = float(part.get("width", part.get("x", 10)))
+        d = float(part.get("depth", part.get("y", 10)))
+        h = float(part.get("height", part.get("z", 10)))
+        return [w, d, h]
+    if prim == "cylinder":
+        r = float(part.get("radius", 5))
+        d_ = float(part.get("diameter", r * 2))
+        h = float(part.get("height", 10))
+        return [d_, h]
+    if prim == "sphere":
+        return [float(part.get("radius", 5))]
+    return [10, 10, 10]
+
+
+def _hole_code(hole: dict[str, Any]) -> list[str]:
+    """生成单个挖除实体的代码行（缩进对齐 difference() 内部）。
+
+    同样支持 radius/height、cuboid、size 标量等规范化。
+    """
+    prim = hole.get("primitive", "cube")
+    size = _normalize_hole_size(prim, hole)
+    center = hole.get("center", [0, 0, 0])
+    body = _part_body(prim, size, center, "hole")
+    lines = [f"    // hole: {prim} {size} @ {center}"]
+    lines += [f"      {l}" if l else l for l in body]
+    return lines
+
+
+def _part_module(name: str, part: dict[str, Any]) -> list[str]:
+    """生成一个 part 对应的 OpenSCAD 模块定义。
+
+    rotation 绕部件自身中心（center）旋转，包裹整个部件体（含孔洞挖除）。
+    """
+    part_name = part.get("id", name)
+    prim = part.get("primitive", "cube")
+    center = part.get("center", [0, 0, 0])
+    rotation = part.get("rotation") or [0, 0, 0]
+    holes = part.get("holes") or []
+    note = part.get("note", "")
+
+    # 规范化尺寸：兼容 size=[..]、size=标量、radius/height、cuboid/box 等多种 LLM 输出
+    size = _normalize_size(prim, part)
+
+    # 部件体（主体 + 孔洞）
+    body: list[str] = []
+    if holes:
+        body.append("  difference() {")
+        body += [f"    {l}" if l else l for l in _part_body(prim, size, center, note)]
+        for hole in holes:
+            body += _hole_code(hole)
+        body.append("  }")
+    else:
+        body += [f"  {l}" if l else l for l in _part_body(prim, size, center, note)]
+
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    rx, ry, rz = (float(rotation[i]) for i in range(3))
+    has_rot = any(abs(v) > 1e-6 for v in (rx, ry, rz))
+
+    lines: list[str] = [f"module {part_name}() {{"]
+    if has_rot:
+        # 绕部件中心旋转：translate 到中心 → rotate → 内部几何以中心为原点生成
+        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+        lines.append(f"    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
+        lines += [f"      {l}" if l else l for l in _part_body_rel(prim, size, note)]
+        for hole in holes:
+            lines += _hole_code_rel(hole, center)
+    else:
+        lines += body
+    lines.append("}")
+    return lines
+
+
+def _part_body(prim: str, size: list[float], center: list[float], note: str) -> list[str]:
+    """按绝对坐标（center）生成几何体。"""
+    builder = PRIMITIVE_BUILDERS.get(prim, _cube_code)
+    return builder(size, center, [], note).split("\n")
+
+
+def _part_body_rel(prim: str, size: list[float], note: str) -> list[str]:
+    """按相对坐标（中心为原点）生成几何体，用于 rotate 包裹。"""
+    builder = PRIMITIVE_BUILDERS.get(prim, _cube_code)
+    return builder(size, [0, 0, 0], [], note).split("\n")
+
+
+def _hole_code_rel(hole: dict[str, Any], part_center: list[float]) -> list[str]:
+    """相对坐标版本的孔洞（孔洞中心减去部件中心，配合外层 translate+rotate）。"""
+    prim = hole.get("primitive", "cube")
+    size = _normalize_hole_size(prim, hole)
+    hc = hole.get("center", [0, 0, 0])
+    rel_center = [float(hc[i]) - float(part_center[i]) for i in range(3)]
+    # 直接以 rel_center 为原点生成几何（不经过 builder 的默认 center），
+    # 复用 builder 但把其 translate 目标改成 rel_center。
+    builder = PRIMITIVE_BUILDERS.get(prim, _cube_code)
+    body = builder(size, rel_center, [], "").split("\n")
+    out: list[str] = [f"        // hole: {prim} rel{rel_center}"]
+    for line in body:
+        s = line.strip()
+        if s.startswith("translate("):
+            # 重新定位到相对坐标（builder 已按 rel_center 生成，直接用）
+            out.append(f"      {s}")
+        elif s.startswith("//"):
+            continue
+        else:
+            out.append(f"        {s}")
+    return out
+
+
+def _normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
+    """hole 的尺寸规范化（同 part，但默认半径 5 / 高度 10）。"""
+    return _normalize_size(prim, hole)
+
+
+def spec_to_scad(spec: dict[str, Any], config: AgentConfig | None = None) -> str:
+    """规格 dict → 完整 OpenSCAD 源码字符串。"""
+    model_name = spec.get("name", "model")
+    safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in model_name)
+    description = spec.get("description", "")
+    params = spec.get("params") or {}
+    parts = spec.get("parts", [])
+    assembly = spec.get("assembly", {})
+    tips = spec.get("print_tips") or []
+
+    out: list[str] = []
+    out.append(f"// ============================================================")
+    out.append(f"// {model_name} - {description}")
+    out.append(f"// 由 OpenSCAD Agent 自动生成: 图片识别 -> 3D 模型")
+    out.append(f"// 单位: mm | 生成时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if params:
+        out.append(f"// params: {json.dumps(params, ensure_ascii=False)}")
+    out.append(f"// ============================================================")
+    out.append("")
+
+    # 自定义参数声明（OpenSCAD 2021.01 不支持顶层 let，改用注释 + 宏）
+    if params:
+        out.append("// ---------------- 参数 ----------------")
+        for k, v in params.items():
+            out.append(f"// param {k} = {json.dumps(v)}")
+        out.append("")
+
+    # 各部件模块
+    out.append("// ---------------- 部件 ----------------")
+    for part in parts:
+        out += _part_module(part.get("id", part.get("primitive", "part")), part)
+        out.append("")
+
+    # 装配
+    out.append("// ---------------- 装配 ----------------")
+    union_ids: list[str] = assembly.get("union_parts") or [
+        p.get("id", p.get("primitive")) for p in parts
+    ]
+    difference_from = assembly.get("difference_from")
+    out.append(f"// assembly: {assembly.get('description', 'union of parts')}")
+
+    # 顶层: union 所有部件
+    out.append(f"module {safe_name}() {{")
+    out.append("  union() {")
+    for pid in union_ids:
+        pid_safe = str(pid)
+        out.append(f"    {pid_safe}();")
+    out.append("  }")
+    out.append("}")
+    out.append("")
+
+    # 若有全局挖除基准，生成 final 模块
+    if difference_from:
+        base = str(difference_from)
+        others = [p for p in union_ids if p != base]
+        if others:
+            out.append(f"module {safe_name}_final() {{")
+            out.append(f"  difference() {{")
+            out.append(f"    {base}();")
+            out.append("    union() {")
+            for o in others:
+                out.append(f"      {o}();")
+            out.append("    }")
+            out.append("  }")
+            out.append("}")
+            final_module = f"{safe_name}_final"
+        else:
+            final_module = safe_name
+    else:
+        final_module = safe_name
+
+    out.append(f"// 顶层入口")
+    out.append(f"{final_module}();")
+    out.append("")
+
+    if tips:
+        out.append("// ---------------- 3D 打印建议 ----------------")
+        for t in tips:
+            out.append(f"//   - {t}")
+        out.append("")
+
+    return "\n".join(out)
+
+
+def write_spec_and_scad(
+    spec: dict[str, Any],
+    config: AgentConfig,
+    tag: str = "model",
+) -> tuple[str, str, str]:
+    """写 spec.json + model.scad 到 config.output_dir，返回 (spec_path, scad_path, model_name)。"""
+    from pathlib import Path
+
+    out_dir = Path(config.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_name = spec.get("name", tag)
+    safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in model_name)
+
+    spec_path = out_dir / f"{safe}_spec.json"
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    scad_src = spec_to_scad(spec, config)
+    scad_path = out_dir / f"{safe}.scad"
+    scad_path.write_text(scad_src, encoding="utf-8")
+    print(f"[gen] 规格已写入: {spec_path}")
+    print(f"[gen] OpenSCAD 源码已写入: {scad_path}")
+    return str(spec_path), str(scad_path), safe

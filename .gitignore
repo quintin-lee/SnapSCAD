@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 构建/输出产物（生成的模型与预览图不入库）
+out/
+out_test/
+_dist/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+
+# 依赖锁（如需锁定可保留，默认忽略）
+# 保留 requirements.txt 入库
