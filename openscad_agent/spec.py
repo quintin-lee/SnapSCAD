@@ -250,6 +250,23 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
     return out
 
 
+_UNIT_FACTORS = {
+    "mm": 1.0, "millimeter": 1.0, "millimeters": 1.0,
+    "cm": 10.0, "centimeter": 10.0, "centimeters": 10.0,
+    "m": 1000.0, "meter": 1000.0, "meters": 1000.0,
+    "in": 25.4, "inch": 25.4, "inches": 25.4,
+}
+
+
+def _scale_geom(val: Any, factor: float) -> Any:
+    """递归按比例缩放几何尺寸与坐标。"""
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return round(float(val) * factor, 4)
+    if isinstance(val, list):
+        return [_scale_geom(x, factor) for x in val]
+    return val
+
+
 def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """校验并规范化整个规格，返回 (规范后 spec, 问题列表)。
 
@@ -276,6 +293,39 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         out["parts"] = [normalize_part(p, f"part_{i}") for i, p in enumerate(parts or [])]
     else:
         out["parts"] = [normalize_part(p, f"part_{i}") for i, p in enumerate(parts)]
+
+    # 工业尺度自动归一化：支持 cm / inch / m 自动换算为 OpenSCAD 标尺 mm
+    raw_units = str(out.get("units", "mm")).strip().lower()
+    factor = _UNIT_FACTORS.get(raw_units, 1.0)
+    if abs(factor - 1.0) > 1e-4:
+        issues.append(f"单位 '{raw_units}' 自动换算为标准毫米 (缩放系数 ×{factor})")
+        out["units"] = "mm"
+        for p in out["parts"]:
+            p["size"] = _scale_geom(p.get("size"), factor)
+            p["center"] = _scale_geom(p.get("center"), factor)
+            if "height" in p:
+                p["height"] = _scale_geom(p["height"], factor)
+            if "radius" in p:
+                p["radius"] = _scale_geom(p["radius"], factor)
+            if "r1" in p:
+                p["r1"] = _scale_geom(p["r1"], factor)
+            if "r2" in p:
+                p["r2"] = _scale_geom(p["r2"], factor)
+            if p.get("polygon"):
+                p["polygon"] = _scale_geom(p["polygon"], factor)
+            if p.get("points"):
+                p["points"] = _scale_geom(p["points"], factor)
+            if p.get("linear_array"):
+                p["linear_array"]["step"] = _scale_geom(p["linear_array"]["step"], factor)
+            if p.get("radial_array"):
+                p["radial_array"]["radius"] = _scale_geom(p["radial_array"]["radius"], factor)
+            for h in p.get("holes", []):
+                h["size"] = _scale_geom(h.get("size"), factor)
+                h["center"] = _scale_geom(h.get("center"), factor)
+                if h.get("linear_array"):
+                    h["linear_array"]["step"] = _scale_geom(h["linear_array"]["step"], factor)
+                if h.get("radial_array"):
+                    h["radial_array"]["radius"] = _scale_geom(h["radial_array"]["radius"], factor)
 
     # 规范化 id：去重
     seen: set[str] = set()
