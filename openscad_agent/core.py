@@ -215,8 +215,18 @@ class OpenscadRenderer:
         """
         return self.render_preview_view(scad_path, out_png, size=size, view="perspective")
 
-    #: 常用预览视角（用于多视角渲染 + 审查）
-    VIEWS = ("top", "front", "iso", "perspective")
+    #: 常用预览视角（用于多视角渲染、工程制图与审查）
+    VIEWS = ("top", "front", "side", "iso", "perspective")
+
+    #: 机械制图物理相机角度映射: 视角名 -> (旋转角度 rot_x,rot_y,rot_z, 投影模式 o正交/p透视)
+    CAMERA_MATRIX = {
+        "top":         ("0,0,0", "o"),      # 真实正俯视 (俯看 XY 投影)
+        "front":       ("90,0,0", "o"),     # 真实主视/正视 (直视 XZ 投影)
+        "side":        ("90,0,90", "o"),    # 真实侧视/右视 (侧视 YZ 投影)
+        "right":       ("90,0,90", "o"),
+        "iso":         ("55,0,25", "o"),    # 工业标准等轴测正投影
+        "perspective": ("55,0,25", "p"),    # 三维空间立体透视
+    }
 
     def render_preview_view(
         self,
@@ -225,11 +235,10 @@ class OpenscadRenderer:
         size: tuple[int, int] = (800, 600),
         view: str = "perspective",
     ) -> Path:
-        """按指定视角渲染 2D 预览图。
+        """按指定物理相机角度渲染真实 2D 工程视角图。
 
-        view 取值：top/front/right/left/back/iso/perspective。
-        用 --projection + --camera 控制相机；老版本若不支持某参数会报 unrecognised，
-        此时回退到不带视角参数的默认渲染，保证不中断。
+        view 取值：top/front/side/iso/perspective。
+        自动注入 --camera 空间旋转与 --projection 正交/透视矩阵。
         """
         out_png.parent.mkdir(parents=True, exist_ok=True)
         base = self._base_cmd() + [
@@ -238,17 +247,18 @@ class OpenscadRenderer:
             *self._preview_arg(),
             "-o", str(out_png), str(scad_path),
         ]
-        # 视角参数（OpenSCAD --view 可选值: axes/crosshairs/edges/scales/wireframe；
-        # 真正视角用 --camera translate/rot。此处用 --projection 控制正/透视）。
-        proj = "o" if view in ("top", "front", "right", "left", "back") else "p"
-        cmd = base + [f"--projection={proj}"]
+        rot, proj = self.CAMERA_MATRIX.get(view, ("55,0,25", "p"))
+        cmd = base + [
+            f"--camera=0,0,0,{rot},100",
+            f"--projection={proj}",
+        ]
         code, out, err = run_cmd(cmd)
-        if code != 0 and "unrecognised" in (err or out).lower():
-            # 老版本不支持 --projection → 回退默认
-            code, out, err = run_cmd(base)
+        if code != 0 and ("camera" in (err or out).lower() or "unrecognised" in (err or out).lower()):
+            # 容错回退
+            code, out, err = run_cmd(base + [f"--projection={proj}"])
         if code != 0:
             raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}, view={view}):\n{err or out}")
-        _log.info("[render] 已生成预览图(%s): %s", view, out_png)
+        _log.info("[render] 已生成真实物理视角图(%s): %s", view, out_png)
         return out_png
 
     def render_multi_view(
