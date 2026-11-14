@@ -237,6 +237,22 @@ def _rotate_extrude_code(part: dict[str, Any], center: list[float], note: str) -
     return lines
 
 
+def _text_code(part: dict[str, Any], center: list[float], note: str) -> list[str]:
+    """3D 浮雕与铭牌文字生成器。"""
+    raw_text = str(part.get("text", part.get("content", "CAD"))).replace('"', '\\"')
+    font_size = float(part.get("font_size", 10.0))
+    h = float(part.get("height", 3.0))
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    font_str = f', font = "{part.get("font")}"' if part.get("font") else ""
+
+    lines = [f"  // {note}" if note else f"  // 3D text: \"{raw_text}\""]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+    lines.append(f"    linear_extrude(height = {_fmt(h)}) {{")
+    lines.append(f'      text("{raw_text}", size = {_fmt(font_size)}, halign = "center", valign = "center"{font_str});')
+    lines.append("    }")
+    return lines
+
+
 def _apply_array_wrapper(lines: list[str], item: dict[str, Any], indent: str = "") -> list[str]:
     """对几何行列表应用环形均布 (radial_array) 或线性等距阵列 (linear_array)。"""
     radial = item.get("radial_array")
@@ -353,12 +369,14 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
         lines.append("}")
         return lines
 
-    # linear_extrude 直拉伸与 rotate_extrude 回转体
-    if prim in ("linear_extrude", "rotate_extrude"):
+    # linear_extrude 直拉伸, rotate_extrude 回转体 与 text 浮雕文字
+    if prim in ("linear_extrude", "rotate_extrude", "text"):
         if prim == "linear_extrude":
             ext_body = _linear_extrude_code(part, center, note)
-        else:
+        elif prim == "rotate_extrude":
             ext_body = _rotate_extrude_code(part, center, note)
+        else:
+            ext_body = _text_code(part, center, note)
         ext_body = _apply_array_wrapper(ext_body, part, indent=indent)
         rx, ry, rz = (float(rotation[i]) for i in range(3))
         if any(abs(v) > 1e-6 for v in (rx, ry, rz)):
@@ -488,7 +506,7 @@ def _estimate_part_min_z(part: dict[str, Any]) -> float:
     elif prim == "sphere" or prim == "capsule":
         r = float(size[0]) if size else 5.0
         return cz - (0 if prim == "capsule" else r)
-    elif prim in ("linear_extrude", "rotate_extrude"):
+    elif prim in ("linear_extrude", "rotate_extrude", "text"):
         return cz
     elif prim == "polyhedron":
         pts = part.get("points") or part.get("vertices")

@@ -23,7 +23,7 @@ _log = _log_module()
 #: 合法原语名（含 LLM 常见别名）
 PRIMITIVES = {
     "cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull",
-    "linear_extrude", "rotate_extrude", "counterbore",
+    "linear_extrude", "rotate_extrude", "counterbore", "text",
 }
 #: 原语别名 → 标准名
 _ALIAS = {
@@ -252,6 +252,14 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
         out["twist"] = _sanitize_num(part.get("twist", 0.0), 0.0)
         out["scale"] = _sanitize_num(part.get("scale", 1.0), 1.0)
         out["angle"] = _sanitize_num(part.get("angle", 360.0), 360.0)
+
+    # 3D 文字规范化
+    if prim == "text":
+        out["text"] = str(part.get("text", part.get("content", "CAD")))
+        out["font_size"] = _sanitize_num(part.get("font_size", 10.0), 10.0)
+        out["height"] = _sanitize_num(part.get("height", 3.0), 3.0)
+        if part.get("font"):
+            out["font"] = str(part.get("font"))
 
     out["size"] = normalize_size(prim, part)
     holes = part.get("holes") or []

@@ -425,7 +425,7 @@ SPEC_SCHEMA = """\
   "parts": [
     {
       "id": "string, 部件唯一 id（如 'body'）",
-      "primitive": "cube|cylinder|sphere|capsule|polyhedron|linear_extrude|rotate_extrude",
+      "primitive": "cube|cylinder|sphere|capsule|polyhedron|linear_extrude|rotate_extrude|text",
       // 尺寸/参数字段（优先使用 size，拉伸/回转使用 polygon 二维轮廓）:
       //   cube:           size: [x, y, z]
       //   cylinder/cone:  size: [直径, 高度]  或  [底径d1, 顶径d2, 高度]
@@ -434,6 +434,7 @@ SPEC_SCHEMA = """\
       //   capsule:        size: [半径, 柱高]  或  radius: N, height: N (平滑两端倒角胶囊柱)
       //   linear_extrude: height: H, polygon: [[x,y],...], twist: deg, scale: S (2D草图直拉伸/扭转)
       //   rotate_extrude: angle: 360, polygon: [[x,y],...] (2D截面回转体如花瓶/圆环/滑轮)
+      //   text:           text: "STRING", font_size: N, height: H (3D立体浮雕文字或铭牌刻字)
       "size": [x, y, z],
       "radius": N,          // 圆柱/球/胶囊专用（size 缺省时使用）
       "height": N,          // 圆柱/胶囊/拉伸专用（size 缺省时使用）
