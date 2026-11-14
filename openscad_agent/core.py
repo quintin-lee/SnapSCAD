@@ -87,6 +87,8 @@ class AgentConfig:
     ground_z: bool = True
     #: 是否同步导出现代切片格式 3MF (适配 Bambu/Orca/Prusa Slicer)
     export_3mf: bool = True
+    #: 是否并联提取 Canny 物理几何边缘轮廓辅助视觉理解
+    enable_edge_map: bool = True
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
@@ -459,6 +461,23 @@ def preprocess_image(src: Path, dst: Path, max_side: int = 2048) -> Path:
     if code != 0:
         raise RuntimeError(f"图片预处理失败 {src} -> {dst}: {err.strip()[:300]}")
     _log.info("[preprocess] 图片已预处理: %s (max_side=%d)", dst.name, max_side)
+    return dst
+
+
+def extract_edge_map(src: Path, dst: Path) -> Path:
+    """使用 Canny 算子提取物体的物理几何边缘与结构特征轮廓 (Edge Contour Map)。"""
+    src = Path(src)
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    magick = shutil.which("magick") or shutil.which("convert")
+    if not magick:
+        return dst
+    cmd = [magick, str(src), "-canny", "0x1+10%+30%", str(dst)]
+    code, _, _ = run_cmd(cmd)
+    if code != 0:
+        cmd_fallback = [magick, str(src), "-edge", "1", "-negate", str(dst)]
+        run_cmd(cmd_fallback)
+    _log.info("[preprocess] 已提取几何边缘轮廓先验图: %s", dst.name)
     return dst
 
 

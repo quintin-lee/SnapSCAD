@@ -229,12 +229,16 @@ class AgnesVision:
         ]
         return self._chat(messages)
 
-    def recognize(self, image_path: Path | list[Path] | str | list[str], user_hint: str = "") -> dict[str, Any]:
-        """图片识别：支持单张或多张多角度图片联合建模。
+    def recognize(
+        self,
+        image_path: Path | list[Path] | str | list[str],
+        user_hint: str = "",
+        edge_paths: Optional[list[Path]] = None,
+    ) -> dict[str, Any]:
+        """图片识别：支持单张或多张多角度图片联合建模，并可选并联输入物理边缘轮廓图。
 
-        若提供多张不同视角照片，消息中包含所有图片的 base64 data URL，
-        供多模态模型联合比对各视角，消除单视角深度与遮挡盲区。
-        若接口拒绝多模态格式，则降级为纯文本请求。
+        若提供多张不同视角照片或边缘轮廓图，多模态模型联合比对各视角与轮廓边界，
+        消除单视角深度与光影反光干扰。
         """
         paths = [Path(p) for p in (image_path if isinstance(image_path, (list, tuple)) else [image_path])]
         context_text = f"{user_hint} {' '.join(p.stem for p in paths)}"
@@ -245,9 +249,17 @@ class AgnesVision:
         ]
         for idx, p in enumerate(paths):
             data_url = self._image_data_url(p)
-            label = f"[参考视角 {idx + 1}: {p.name}]" if len(paths) > 1 else "参考图片"
+            label = f"[参考视角 {idx + 1}: {p.name}]" if len(paths) > 1 else "参考照片"
             multimodal.append({"type": "text", "text": label})
             multimodal.append({"type": "image_url", "image_url": {"url": data_url}})
+
+        if edge_paths:
+            multimodal.append({"type": "text", "text": "以下是提取的物理几何边缘轮廓图（无光影干扰，指示边界线条与孔位）:"})
+            for idx, ep in enumerate(edge_paths):
+                if ep.exists():
+                    data_url_edge = self._image_data_url(ep)
+                    multimodal.append({"type": "text", "text": f"[边缘轮廓 {idx + 1}: {ep.name}]"})
+                    multimodal.append({"type": "image_url", "image_url": {"url": data_url_edge}})
 
         if user_hint:
             multimodal.insert(0, {"type": "text", "text": f"用户补充说明: {user_hint}"})

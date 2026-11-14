@@ -109,26 +109,32 @@ class OpenscadAgent:
         if missing:
             return AgentResult(success=False, errors=[f"图片不存在: {', '.join(str(m) for m in missing)}"])
 
-        # 1. 预处理所有输入图片
+        # 1. 预处理所有输入图片 (支持并联生成 Canny 几何边缘先验图)
         prep_dir = Path(self.config.output_dir) / "_prep"
         prep_dir.mkdir(parents=True, exist_ok=True)
         prep_paths: list[Path] = []
+        edge_paths: list[Path] = []
         try:
+            from .core import extract_edge_map
             for idx, img in enumerate(images):
                 target = prep_dir / f"{img.stem}_prep_{idx}.png"
                 preprocess_image(img, target, max_side=self.config.image_max_side)
                 prep_paths.append(target)
+                if getattr(self.config, "enable_edge_map", True):
+                    edge_target = prep_dir / f"{img.stem}_edge_{idx}.png"
+                    extract_edge_map(target, edge_target)
+                    edge_paths.append(edge_target)
         except Exception as e:  # noqa: BLE001
-            for p in prep_paths:
+            for p in prep_paths + edge_paths:
                 _rm_quiet(p)
             _rm_empty_dir(prep_dir)
             return AgentResult(success=False, errors=[f"图片预处理失败: {e}"])
 
-        # 2. 识别（多图联合输入）
+        # 2. 识别（多图联合输入 + Canny 几何轮廓并联）
         try:
-            spec = self.vision.recognize(prep_paths, user_hint=hint)
+            spec = self.vision.recognize(prep_paths, user_hint=hint, edge_paths=edge_paths or None)
         except (SpecParseError, RuntimeError) as e:
-            for p in prep_paths:
+            for p in prep_paths + edge_paths:
                 _rm_quiet(p)
             _rm_empty_dir(prep_dir)
             return AgentResult(success=False, errors=[f"识别/解析失败: {e}"])
@@ -142,7 +148,7 @@ class OpenscadAgent:
         )
 
         # 识别与建模完成后删除临时预处理图 (避免 out/_prep 反复累积)
-        for p in prep_paths:
+        for p in prep_paths + edge_paths:
             _rm_quiet(p)
         _rm_empty_dir(prep_dir)
         return result

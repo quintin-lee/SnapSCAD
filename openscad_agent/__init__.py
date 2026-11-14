@@ -5,7 +5,7 @@
   OpenscadAgent(config).build_from_description(text)
 """
 
-from .core import AgentConfig, OpenscadRenderer, preprocess_image, SPEC_SCHEMA, generate_html_viewer, upload_to_3d_printer
+from .core import AgentConfig, OpenscadRenderer, preprocess_image, extract_edge_map, SPEC_SCHEMA, generate_html_viewer, upload_to_3d_printer
 from .agent import AgentResult, OpenscadAgent
 from .vision import AgnesVision, SpecParseError
 from .geometry import spec_to_scad, write_spec_and_scad
@@ -25,6 +25,7 @@ __all__ = [
     "spec_to_scad",
     "write_spec_and_scad",
     "preprocess_image",
+    "extract_edge_map",
     "SPEC_SCHEMA",
     "setup_logging",
     "get_logger",
