@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from .core import AgentConfig
+from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole
 
 
 def _fmt(v: float) -> str:
@@ -138,39 +139,13 @@ PRIMITIVE_BUILDERS = {
 
 
 def _normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
-    """把 LLM 输出的多种尺寸字段统一为生成器期望的 size 列表。
+    """委托 spec.normalize_size（唯一权威实现）。"""
+    return _spec_norm_size(prim, part)
 
-    - cube/cuboid: size=[x,y,z] 或 size=N(立方体) 或 width/depth/height
-    - cylinder:  size=[直径,高度] 或 radius/height/diameter/height
-    - sphere:    size=[半径] 或 radius
-    - polyhedron: 有 points/faces 时用 size 估算，否则默认 10x10x10
-    """
-    raw = part.get("size")
-    # 标量 size (如 5) → 立方体
-    if isinstance(raw, (int, float)):
-        v = float(raw)
-        if prim in ("cube", "cuboid", "box"):
-            return [v, v, v]
-        if prim == "sphere":
-            return [v]
-        if prim == "cylinder":
-            return [v * 2, v]  # 直径=半径*2, 高度=半径
-    if raw and isinstance(raw, list):
-        return [float(x) for x in raw]
-    # 从其他字段推断
-    if prim in ("cube", "cuboid", "box"):
-        w = float(part.get("width", part.get("x", 10)))
-        d = float(part.get("depth", part.get("y", 10)))
-        h = float(part.get("height", part.get("z", 10)))
-        return [w, d, h]
-    if prim == "cylinder":
-        r = float(part.get("radius", 5))
-        d_ = float(part.get("diameter", r * 2))
-        h = float(part.get("height", 10))
-        return [d_, h]
-    if prim == "sphere":
-        return [float(part.get("radius", 5))]
-    return [10, 10, 10]
+
+def _normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
+    """委托 spec.normalize_hole_size。"""
+    return _spec_norm_hole(prim, hole)
 
 
 def _hole_code(hole: dict[str, Any]) -> list[str]:
@@ -382,11 +357,21 @@ def write_spec_and_scad(
     config: AgentConfig,
     tag: str = "model",
 ) -> tuple[str, str, str]:
-    """写 spec.json + model.scad 到 config.output_dir，返回 (spec_path, scad_path, model_name)。"""
+    """写 spec.json + model.scad 到 config.output_dir，返回 (spec_path, scad_path, model_name)。
+
+    写盘前先经 spec.validate_spec 规范化/校验，保证生成的 .scad 可编译。
+    """
     from pathlib import Path
+    from .spec import validate_spec
+    from openscad_agent.log import get_logger
+    _log = get_logger()
 
     out_dir = Path(config.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 规范化 + 校验（补全缺省/修正类型/去重 id/过滤未知 union）
+    spec, issues = validate_spec(spec)
+    for iss in issues:
+        _log.warning("[spec] %s", iss)
     model_name = spec.get("name", tag)
     safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in model_name)
 
@@ -396,8 +381,6 @@ def write_spec_and_scad(
     scad_src = spec_to_scad(spec, config, fn=config.fn_value() if config else 0)
     scad_path = out_dir / f"{safe}.scad"
     scad_path.write_text(scad_src, encoding="utf-8")
-    from openscad_agent.log import get_logger
-    _log = get_logger()
     _log.info("[gen] 规格已写入: %s", spec_path)
     _log.info("[gen] OpenSCAD 源码已写入: %s", scad_path)
     return str(spec_path), str(scad_path), safe
