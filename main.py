@@ -17,6 +17,7 @@ from pathlib import Path
 
 from openscad_agent import AgentConfig, OpenscadAgent, SPEC_SCHEMA
 from openscad_agent.gallery import generate_gallery
+from openscad_agent.packager import package_project
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-review", action="store_true", help="跳过渲染图审查闭环 (默认开启)")
     p.add_argument("--no-multi-view", action="store_true", help="审查时不做多视角渲染 (默认开启)")
     p.add_argument("--no-3mf", action="store_true", help="跳过同步导出 3MF 格式 (默认同时导出 STL+3MF)")
+    p.add_argument("--zip", action="store_true", help="建模完成后一键打包全套工程资产为 ZIP 压缩包 (*_project.zip)")
     p.add_argument("--no-render", action="store_true", help="跳过 3D/预览渲染, 仅生成 .scad")
     p.add_argument("--preview-only", action="store_true", help="仅渲染 2D 预览, 跳过 3D 导出")
     p.add_argument("--max-image-side", type=int, default=2048, help="图片预处理最大边长")
@@ -156,6 +158,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   3D 网页查看器 : {result.viewer_html}")
         if result.print_guide:
             print(f"   切片工艺指导  : {result.print_guide}")
+        if args.zip and result.scad_path:
+            try:
+                zpath = package_project(result.scad_path)
+                print(f"   工程打包 ZIP  : {zpath}")
+            except Exception as e:
+                print(f"   打包 ZIP 异常 : {e}")
         try:
             gpath = generate_gallery(args.output)
             print(f"   3D 展厅画廊   : {gpath}")

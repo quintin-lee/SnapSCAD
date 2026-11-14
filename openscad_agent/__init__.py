@@ -13,6 +13,7 @@ from .log import setup_logging, get_logger
 from .spec import validate_spec, normalize_part
 from .doctor import check_printability, PrintabilityReport, generate_print_guide
 from .gallery import generate_gallery
+from .packager import package_project
 
 __all__ = [
     "AgentConfig",
@@ -34,4 +35,5 @@ __all__ = [
     "PrintabilityReport",
     "generate_print_guide",
     "generate_gallery",
+    "package_project",
 ]

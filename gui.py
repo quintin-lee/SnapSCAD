@@ -516,6 +516,10 @@ class MainWindow(QMainWindow):
         self.btn_export_dxf.clicked.connect(self.on_export_dxf)
         act_bar.addWidget(self.btn_export_dxf)
 
+        self.btn_pack_zip = QPushButton("📦 打包工程 ZIP")
+        self.btn_pack_zip.clicked.connect(self.on_package_zip)
+        act_bar.addWidget(self.btn_pack_zip)
+
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
@@ -903,6 +907,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"2D 投影导出异常: {e}")
 
+    def on_package_zip(self) -> None:
+        """把当前模型全套工程资产一键打包为 ZIP 归档。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成 OpenSCAD 文件。请先完成一次建模。")
+            return
+        from openscad_agent.packager import package_project
+        try:
+            zip_p = package_project(self._scad_path)
+            self.log(f"📦 全套工程资产打包成功: {zip_p.name} (大小: {zip_p.stat().st_size} 字节)")
+            self._refresh_file_list(Path(self._scad_path).parent)
+            QMessageBox.information(self, "打包成功", f"全套工程资产已打包为:\n{zip_p}\n包含 3D模型、2D图纸、源码、网页查看器与工艺指导书。")
+        except Exception as e:
+            QMessageBox.warning(self, "打包失败", f"工程打包异常: {e}")
+
     def on_file_clicked(self, item: QListWidgetItem) -> None:
         """单击文件列表项预览内容。"""
         fpath = item.data(Qt.ItemDataRole.UserRole)
@@ -1198,7 +1216,7 @@ class MainWindow(QMainWindow):
             return
         for f in sorted(out_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in (
-                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json", ".html", ".dxf", ".svg"
+                ".scad", ".stl", ".obj", ".3mf", ".csg", ".amf", ".png", ".json", ".html", ".dxf", ".svg", ".zip", ".md"
             ):
                 item = QListWidgetItem(f.name)
                 item.setData(Qt.ItemDataRole.UserRole, str(f))
