@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QSpinBox, QDoubleSpinBox, QTabWidget,
 )
 
-from openscad_agent import AgentConfig, OpenscadAgent
+from openscad_agent import AgentConfig, OpenscadAgent, OpenscadRenderer
 from openscad_agent.vision import AgnesVision, SpecParseError
 
 
@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self._last_desc: str = ""
         self._current_preview_png: Optional[str] = None
         self._settings = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
+        self.setAcceptDrops(True)
         self._build_ui()
         self._load_settings()
         self._connect_settings_signals()
@@ -275,11 +276,23 @@ class MainWindow(QMainWindow):
         self.spec_tree = tree
         lay.addWidget(tree, stretch=1)
 
-        lay.addWidget(QLabel("<b>生成的 OpenSCAD 源码</b>", wordWrap=True))
+        scad_bar = QHBoxLayout()
+        scad_bar.addWidget(QLabel("<b>OpenSCAD 源码 (支持在线微调)</b>"))
+        scad_bar.addStretch(1)
+        self.btn_rerender = QPushButton("⚡ 重新渲染源码")
+        self.btn_rerender.setStyleSheet(
+            "QPushButton { background-color: #059669; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #047857; }"
+        )
+        self.btn_rerender.clicked.connect(self.on_rerender_scad)
+        scad_bar.addWidget(self.btn_rerender)
+        lay.addLayout(scad_bar)
+
         self.txt_scad = QPlainTextEdit()
-        self.txt_scad.setReadOnly(True)
+        self.txt_scad.setReadOnly(False)
+        self.txt_scad.setPlaceholderText("// 在此处直接编辑 OpenSCAD 源码，点击右上角「重新渲染源码」即刻生效")
         self.txt_scad.setStyleSheet("font-family: 'Monospace', monospace;")
-        self.txt_scad.setFixedHeight(200)
+        self.txt_scad.setFixedHeight(220)
         lay.addWidget(self.txt_scad)
         return w
 
@@ -541,6 +554,93 @@ class MainWindow(QMainWindow):
         if fpath and Path(fpath).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(fpath)))
             self.log(f"调用系统默认程序打开: {Path(fpath).name}")
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        """拖入图片文件时显示允许放置。"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                ext = Path(url.toLocalFile()).suffix.lower()
+                if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"):
+                    event.acceptProposedAction()
+                    return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        """释放拖入的图片：自动填入路径并立即刷新原图展示。"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                fpath = url.toLocalFile()
+                ext = Path(fpath).suffix.lower()
+                if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"):
+                    self.image_path.setText(fpath)
+                    self._last_image = fpath
+                    self.log(f"已拖入图片: {fpath}")
+                    pm = QPixmap(fpath)
+                    if not pm.isNull():
+                        scaled = pm.scaled(
+                            self.lbl_origin.size(),
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        self.lbl_origin.setPixmap(scaled)
+                        self.lbl_origin.setStyleSheet("QLabel { border: 2px solid #16a34a; border-radius: 8px; }")
+                    event.acceptProposedAction()
+                    return
+        super().dropEvent(event)
+
+    def on_rerender_scad(self) -> None:
+        """在线微调 OpenSCAD 源码后，一键重新渲染 3D 模型与预览图。"""
+        src = self.txt_scad.toPlainText().strip()
+        if not src:
+            QMessageBox.warning(self, "提示", "源码为空，无法渲染。")
+            return
+
+        outdir = Path(self.txt_outdir.text().strip() or "out")
+        outdir.mkdir(parents=True, exist_ok=True)
+        if self._scad_path:
+            scad_path = Path(self._scad_path)
+        else:
+            scad_path = outdir / "custom_model.scad"
+            self._scad_path = str(scad_path)
+
+        scad_path.write_text(src, encoding="utf-8")
+        self.log(f"⚡ 源码已保存至: {scad_path.name}，开始重新编译渲染…")
+
+        fmt = self.cmb_format.currentText()
+        config = AgentConfig(
+            output_dir=str(outdir),
+            export_format=fmt,
+            render_precision=self.cmb_precision.currentText(),
+        )
+        renderer = OpenscadRenderer(config)
+
+        # 语法校验
+        ok, msg = renderer.validate(scad_path)
+        if not ok:
+            QMessageBox.warning(self, "编译失败", f"OpenSCAD 语法或编译错误:\n{msg[:500]}")
+            self.log(f"❌ 重新编译失败: {msg[:300]}")
+            return
+
+        # 导出 3D 模型
+        if self.chk_render.isChecked():
+            model_file = scad_path.with_suffix("." + fmt)
+            try:
+                renderer.export_model(scad_path, model_file)
+                self.log(f"已重新导出模型: {model_file.name}")
+            except Exception as e:
+                self.log(f"导出模型异常: {e}")
+
+        # 渲染预览图
+        preview_png = scad_path.with_name(f"{scad_path.stem}_preview.png")
+        try:
+            renderer.render_preview(scad_path, preview_png)
+            self._current_preview_png = str(preview_png)
+            self._show_preview(str(preview_png), origin_image=self._last_image)
+            self.log(f"✅ 重新渲染预览图成功: {preview_png.name}")
+        except Exception as e:
+            self.log(f"渲染预览图异常: {e}")
+
+        self._refresh_file_list(outdir)
 
     # ------------------------------------------------------------------
     # UI 辅助
