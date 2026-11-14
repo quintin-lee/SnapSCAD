@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--show-prompt", action="store_true", help="打印识别用系统提示词后退出")
     p.add_argument("--test", action="store_true", help="执行全套自动化工程质量自检与回归测试套件")
     p.add_argument("--serve", nargs="?", const="8080", help="启动局域网 3D 资产共享 Web 服务 (可指定端口如 --serve 8080)")
+    p.add_argument("--wizard", action="store_true", help="启动交互式终端步进建模向导")
     return p
 from openscad_agent.log import setup_logging
 
@@ -74,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
         serve_assets(args.output, port=port, blocking=True)
         return 0
 
+    if args.wizard:
+        return run_cli_wizard()
+
     setup_logging(log_file="out/agent.log")
 
     if args.gallery and not args.image and not args.describe and not args.batch_dir:
@@ -82,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.image and not args.describe and not args.batch_dir:
+        if sys.stdin.isatty():
+            return run_cli_wizard()
         build_parser().print_help()
         return 1
 
@@ -205,6 +211,90 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   (已生成未通过校验的源码: {result.scad_path})")
     print("=" * 60)
     return 0 if result.success else 1
+
+
+def run_cli_wizard() -> int:
+    """启动交互式终端建模向导。"""
+    print("\n" + "=" * 60)
+    print("🧙 欢迎使用 SnapSCAD 终端智能建模向导!")
+    print("=" * 60)
+
+    print("\n[1/4] 请选择建模输入方式:")
+    print("  1. 输入单张或多张本地照片路径 (支持多角度)")
+    print("  2. 输入纯自然语言描述")
+    print("  3. 批量图片目录处理")
+    choice = input("请输入选项编号 [1/2/3, 默认 2]: ").strip() or "2"
+
+    images = []
+    desc = ""
+    batch_dir = ""
+    hint = ""
+
+    if choice == "1":
+        path_str = input("请输入图片文件路径 (多图用空格或逗号分隔): ").strip()
+        for p in path_str.replace(",", " ").split():
+            if p:
+                images.append(p)
+        hint = input("可选补充说明 (例如: 铝合金外壳，底部带沉孔): ").strip()
+    elif choice == "3":
+        batch_dir = input("请输入包含待处理图片的目录路径: ").strip()
+    else:
+        desc = input("请输入你想创建的 3D 模型自然语言描述:\n> ").strip()
+        if not desc:
+            desc = "一个标准的 M4 螺栓，长度 20mm，圆柱头"
+            print(f"（使用默认描述: {desc}）")
+
+    print("\n[2/4] 请选择模型/服务商配置:")
+    print("  1. Agnes AI 云端 (agnes-3.0-flash, 默认)")
+    print("  2. 本地离线 Ollama (无需 Key, http://localhost:11434/v1)")
+    print("  3. OpenAI (gpt-4o)")
+    print("  4. DeepSeek (deepseek-chat)")
+    prov_choice = input("请输入选项编号 [1/2/3/4, 默认 1]: ").strip() or "1"
+
+    if prov_choice == "2":
+        base_url = "http://localhost:11434/v1"
+        model = "qwen2.5-coder:latest"
+    elif prov_choice == "3":
+        base_url = "https://api.openai.com/v1"
+        model = "gpt-4o"
+    elif prov_choice == "4":
+        base_url = "https://api.deepseek.com"
+        model = "deepseek-chat"
+    else:
+        base_url = "https://apihub.agnes-ai.com"
+        model = "agnes-3.0-flash"
+
+    print("\n[3/4] 请选择输出精度与质量:")
+    print("  1. High (高质量完整 CSG 求值, $fn=64, 默认)")
+    print("  2. Slow (标准质量, $fn=32)")
+    print("  3. Fast (快速粗糙预览, $fn=24)")
+    prec_choice = input("请输入选项编号 [1/2/3, 默认 1]: ").strip() or "1"
+    precision_map = {"1": "High", "2": "Slow", "3": "Fast"}
+    precision = precision_map.get(prec_choice, "High")
+
+    print("\n[4/4] 附加选项:")
+    review = (input("是否启用多视角视觉审查闭环? [Y/n, 默认 Y]: ").strip().lower() != "n")
+    pack_zip = (input("是否一键打包全套工程 ZIP 归档? [y/N, 默认 N]: ").strip().lower() == "y")
+
+    argv = ["--precision", precision, "--model", model, "--base-url", base_url]
+    if not review:
+        argv.append("--no-review")
+    if pack_zip:
+        argv.append("--zip")
+    if hint:
+        argv += ["--hint", hint]
+
+    if batch_dir:
+        argv += ["--batch-dir", batch_dir]
+    elif images:
+        argv += ["--image"] + images
+    else:
+        argv += ["--describe", desc]
+
+    print("\n" + "=" * 60)
+    print("🚀 参数就绪，正在启动建模流水线…")
+    print("=" * 60)
+    return main(argv)
 
 
 if __name__ == "__main__":
