@@ -32,6 +32,9 @@
 - **渲染图审查闭环**：渲染出的预览图与原图回传 LLM 比对，不符合预期则
   自动修正规格并重渲染，直到符合或达上限；含回归保护（拒绝减少部件数的
   “简化型”修正）与得分回退（未收敛时保留迄今最好的一版）。
+- **自动接地平贴 Z=0**：自动计算包围盒最低点并垂直对齐，确保模型平贴打印底板，开箱即切片。
+- **便携式 HTML 3D 查看器**：导出 STL 同步生成内嵌 Three.js 查看器，双击即可在任何浏览器 360° 旋转检视。
+- **参数化 Customizer 支持**：自定义参数直接生成 OpenSCAD 全局变量，在 OpenSCAD 中可拖动滑块交互式微调。
 - **零第三方渲染依赖**：只调用系统 `openscad` 与 `magick` 可执行文件。
 
 ## 依赖
@@ -54,15 +57,15 @@ Agnes API key 通过环境变量提供（任一）：
 export AGNES_API_KEY=sk-...
 # 或 AGNES_API_TOKEN / APIHUB_AGNES_API_KEY
 ```
-Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-2.0-flash`。
+Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`。
 
 ## 使用
 
 ### CLI
 
 ```bash
-# 1) 图片建模（自动识别 + 渲染 STL）
-.venv/bin/python main.py --image ./photos/gearbox.jpg --hint "齿轮箱外壳, 铝合金"
+# 1) 图片建模（支持单张或多角度照片联合建模）
+.venv/bin/python main.py --image ./photos/gearbox_front.jpg ./photos/gearbox_side.jpg
 
 # 2) 导出 OBJ 而非 STL
 .venv/bin/python main.py -i photo.png -f obj
@@ -95,6 +98,7 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-2.0-flash`�
 - `<name>.scad` — 生成的 OpenSCAD 源码
 - `<name>.stl` (或所选格式) — 可打印 3D 模型
 - `<name>_preview.png` — OpenSCAD 2D 渲染预览
+- `<name>_viewer.html` — 便携式 3D 网页交互查看器（双击直接在浏览器离线检视）
 
 ## 模块结构
 
