@@ -51,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-image-side", type=int, default=2048, help="图片预处理最大边长")
     p.add_argument("--extra-system", default="", help="追加到系统提示词的额外指令")
     p.add_argument("--show-prompt", action="store_true", help="打印识别用系统提示词后退出")
+    p.add_argument("--test", action="store_true", help="执行全套自动化工程质量自检与回归测试套件")
     return p
 from openscad_agent.log import setup_logging
 
@@ -61,6 +62,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.show_prompt:
         print(SPEC_SCHEMA)
         return 0
+
+    if args.test:
+        from test_agent import run_all_tests
+        return 0 if run_all_tests() else 1
 
     setup_logging(log_file="out/agent.log")
 
