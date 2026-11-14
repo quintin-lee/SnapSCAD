@@ -12,6 +12,7 @@ UI 不卡顿；结果通过 pyqtSignal 回传主线程更新。
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import sys
@@ -399,11 +400,29 @@ class MainWindow(QMainWindow):
         act_bar.addWidget(self.btn_open_dir)
         lay.addLayout(act_bar)
 
-        lay.addWidget(QLabel("<b>输出文件 (单击预览 / 双击打开)</b>", wordWrap=True))
+        self.tabs_assets = QTabWidget()
+
+        # Tab 1: 历史工程资产库
+        tab_proj = QWidget()
+        lay_proj = QVBoxLayout(tab_proj)
+        lay_proj.setContentsMargins(2, 2, 2, 2)
+        self.lst_projects = QListWidget()
+        self.lst_projects.itemClicked.connect(self.on_project_clicked)
+        self.lst_projects.itemDoubleClicked.connect(self.on_project_double_clicked)
+        lay_proj.addWidget(self.lst_projects)
+        self.tabs_assets.addTab(tab_proj, "📚 历史工程库 (单击全景回溯)")
+
+        # Tab 2: 全部散落输出文件
+        tab_files = QWidget()
+        lay_files = QVBoxLayout(tab_files)
+        lay_files.setContentsMargins(2, 2, 2, 2)
         self.lst_files = QListWidget()
         self.lst_files.itemClicked.connect(self.on_file_clicked)
         self.lst_files.itemDoubleClicked.connect(self.on_file_double_clicked)
-        lay.addWidget(self.lst_files, stretch=1)
+        lay_files.addWidget(self.lst_files)
+        self.tabs_assets.addTab(tab_files, "📁 全部输出文件")
+
+        lay.addWidget(self.tabs_assets, stretch=1)
         return w
 
     def _build_log_panel(self) -> QWidget:
@@ -886,8 +905,102 @@ class MainWindow(QMainWindow):
         self.lbl_preview.setText("（预览）")
         self.lbl_preview.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
 
+    def on_project_clicked(self, item: QListWidgetItem) -> None:
+        """单击历史工程：全景回溯加载该工程的规格、源码、预览与产物。"""
+        sf_path = item.data(Qt.ItemDataRole.UserRole)
+        if not sf_path:
+            return
+        sf = Path(sf_path)
+        if not sf.exists():
+            return
+        try:
+            spec = json.loads(sf.read_text(encoding="utf-8"))
+            self._populate_spec_tree(spec)
+        except Exception:
+            spec = None
+
+        name = spec.get("name") if spec else sf.stem.replace("_spec", "")
+        out_dir = sf.parent
+
+        scad_cand = out_dir / f"{name}.scad"
+        if not scad_cand.exists():
+            scad_cand = out_dir / f"{sf.stem.replace('_spec','')}.scad"
+        if scad_cand.exists():
+            self._scad_path = str(scad_cand)
+            try:
+                self.txt_scad.setPlainText(scad_cand.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        prev_cand = out_dir / f"{name}_preview.png"
+        if not prev_cand.exists():
+            prev_cand = out_dir / f"{sf.stem.replace('_spec','')}_preview.png"
+        if prev_cand.exists():
+            self._current_preview_png = str(prev_cand)
+            self._show_preview(str(prev_cand), origin_image=None)
+
+        self.log(f"📚 已全景回溯载入历史工程: {name}")
+
+    def on_project_double_clicked(self, item: QListWidgetItem) -> None:
+        """双击历史工程：优先调起浏览器 3D 网页查看器，无查看器则在 OpenSCAD 中打开。"""
+        sf_path = item.data(Qt.ItemDataRole.UserRole)
+        if not sf_path:
+            return
+        sf = Path(sf_path)
+        base = sf.stem.replace("_spec", "")
+        out_dir = sf.parent
+        html = out_dir / f"{base}_viewer.html"
+        if html.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(html)))
+            self.log(f"已在浏览器中交互检视: {html.name}")
+            return
+        scad = out_dir / f"{base}.scad"
+        if scad.exists():
+            subprocess.Popen(["openscad", str(scad)])
+            self.log(f"已在 OpenSCAD 中打开: {scad.name}")
+
+    def _refresh_projects(self, out_dir: Path) -> None:
+        """扫描输出目录下的所有 *_spec.json，解析为结构化历史工程列表。"""
+        self.lst_projects.clear()
+        if not out_dir.exists():
+            return
+        from openscad_agent.doctor import check_printability
+
+        spec_files = sorted(out_dir.glob("*_spec.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for sf in spec_files:
+            try:
+                spec = json.loads(sf.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            name = spec.get("name") or sf.stem.replace("_spec", "")
+            desc = spec.get("description", "")
+            mtime = datetime.datetime.fromtimestamp(sf.stat().st_mtime).strftime("%m-%d %H:%M")
+
+            doc = check_printability(spec)
+            score_badge = "✅" if doc.score >= 90 else ("⚠️" if doc.score >= 70 else "❌")
+            dim_str = f"{doc.bounding_box[0]}×{doc.bounding_box[1]}×{doc.bounding_box[2]}mm"
+            parts_cnt = len(spec.get("parts", []))
+
+            has_stl = (out_dir / f"{name}.stl").exists() or (out_dir / f"{sf.stem.replace('_spec','')}.stl").exists()
+            has_view = (out_dir / f"{name}_viewer.html").exists() or (out_dir / f"{sf.stem.replace('_spec','')}_viewer.html").exists()
+            badges = []
+            if has_stl:
+                badges.append("3D")
+            if has_view:
+                badges.append("Web")
+            badge_str = f"[{'/'.join(badges)}]" if badges else ""
+
+            label = f"{score_badge} {name}  {badge_str}  ({mtime})  {parts_cnt}部件 | {dim_str}"
+            if desc:
+                label += f"\n   ↳ {desc[:40]}"
+
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, str(sf))
+            self.lst_projects.addItem(item)
+
     def _refresh_file_list(self, out_dir: Path) -> None:
         self.lst_files.clear()
+        self._refresh_projects(out_dir)
         if not out_dir.exists():
             return
         for f in sorted(out_dir.iterdir()):
