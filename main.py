@@ -99,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   自动修正轮数  : {result.fix_rounds}")
         if result.review_rounds:
             print(f"   审查闭环轮数  : {result.review_rounds}")
+            if getattr(result, "score_trajectory", None):
+                print(f"   得分演进走势  : {' -> '.join(str(s) for s in result.score_trajectory)}")
             rv = result.review or {}
             if rv:
                 print(f"   审查结论      : match={rv.get('match')} score={rv.get('score')} | {rv.get('verdict')}")

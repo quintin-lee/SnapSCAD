@@ -490,7 +490,9 @@ class MainWindow(QMainWindow):
             rv = getattr(result, "review", None)
             rr = getattr(result, "review_rounds", 0)
             if rv:
-                self.log(f"🔍 审查闭环: {rr} 轮 | match={rv.get('match')} score={rv.get('score')}")
+                traj = " -> ".join(str(s) for s in getattr(result, "score_trajectory", []))
+                traj_info = f" (走势: {traj})" if traj else ""
+                self.log(f"🔍 审查闭环: {rr} 轮 | match={rv.get('match')} score={rv.get('score')}{traj_info}")
                 if rv.get("verdict"):
                     self.log(f"   结论: {rv.get('verdict')}")
                 for iss in (rv.get("issues") or [])[:5]:

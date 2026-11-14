@@ -245,17 +245,15 @@ class AgnesVision:
         spec: dict[str, Any],
         user_hint: str = "",
         extra_views: Optional[list[Path]] = None,
+        conversation_history: Optional[list[dict[str, Any]]] = None,
+        round_index: int = 1,
     ) -> dict[str, Any]:
-        """审查渲染图：回传原图 + 预览图（可多视角）+ 当前规格，让 LLM 判断是否吻合。
+        """审查渲染图：支持多轮会话上下文记忆（Conversational Review Chain）。
 
-        extra_views: 额外的多视角预览图路径（可选），用于多角度比对。
-        返回 dict，至少含 {match: bool, score: float, issues: list, verdict: str}。
-        若 LLM 限流/不可用或解析失败，返回 {"match": True, "skipped": True, ...}
-        以便流程不中断（保守放行，避免死循环）。
+        在多轮审查中，多模态 LLM 拥有前序轮次的评判建议与生成效果上下文，
+        具备连续性认知，避免互相矛盾或盲目简化的退化现象。
         """
-        orig_url = self._image_data_url(original_image)
         prev_url = self._image_data_url(preview_image)
-        # 预览图主图
         preview_imgs = [prev_url]
         view_labels = ["主视角"]
         if extra_views:
@@ -266,23 +264,44 @@ class AgnesVision:
                 except Exception:  # noqa: BLE001
                     continue
 
-        content: list[dict[str, Any]] = [
-            {"type": "text",
-             "text": f"当前规格:\n{json.dumps(spec, ensure_ascii=False)[:3000]}"},
-            {"type": "image_url", "image_url": {"url": orig_url}},
-            {"type": "text", "text": "以下是渲染预览图（多角度）:"},
-        ]
-        for label, url in zip(view_labels, preview_imgs):
-            content.append({"type": "text", "text": f"[{label}]"})
-            content.append({"type": "image_url", "image_url": {"url": url}})
-        if user_hint:
-            content.insert(0, {"type": "text", "text": f"用户补充说明: {user_hint}"})
+        if round_index == 1 or not conversation_history:
+            # 首轮：提供原图 + 主视角及多视角渲染图 + 当前规格
+            orig_url = self._image_data_url(original_image)
+            content: list[dict[str, Any]] = [
+                {"type": "text", "text": f"当前初版规格:\n{json.dumps(spec, ensure_ascii=False)[:3000]}"},
+                {"type": "image_url", "image_url": {"url": orig_url}},
+                {"type": "text", "text": "以下是当前 OpenSCAD 渲染生成的初版预览图（多角度）:"},
+            ]
+            for label, url in zip(view_labels, preview_imgs):
+                content.append({"type": "text", "text": f"[{label}]"})
+                content.append({"type": "image_url", "image_url": {"url": url}})
+            if user_hint:
+                content.insert(0, {"type": "text", "text": f"用户补充说明: {user_hint}"})
+        else:
+            # 后续轮次：带入上一轮的修正上下文，附带最新渲染图与最新规格
+            content = [
+                {"type": "text", "text": f"已根据上一轮（第 {round_index - 1} 轮）你的修改建议重新生成规格并完成 3D 渲染。\n这是修改后的第 {round_index} 轮最新渲染图与最新规格:\n{json.dumps(spec, ensure_ascii=False)[:3000]}"},
+                {"type": "text", "text": "请继续严格对比原图，评估上一轮修正是否解决了问题，并给出本轮判定与进一步修正建议:"},
+            ]
+            for label, url in zip(view_labels, preview_imgs):
+                content.append({"type": "text", "text": f"[{label}]"})
+                content.append({"type": "image_url", "image_url": {"url": url}})
 
         try:
-            raw = self._chat_raw([
-                {"role": "system", "content": self.REVIEW_PROMPT},
-                {"role": "user", "content": content},
-            ])
+            if conversation_history is not None:
+                conversation_history.append({"role": "user", "content": content})
+                # 为防止上下文过长，保留首轮原图 + 最近 2 轮上下文
+                if len(conversation_history) > 6:
+                    conversation_history[:] = [conversation_history[0], conversation_history[1]] + conversation_history[-4:]
+                messages = [{"role": "system", "content": self.REVIEW_PROMPT}] + list(conversation_history)
+            else:
+                messages = [
+                    {"role": "system", "content": self.REVIEW_PROMPT},
+                    {"role": "user", "content": content},
+                ]
+            raw = self._chat_raw(messages)
+            if conversation_history is not None:
+                conversation_history.append({"role": "assistant", "content": raw})
             return self._extract_review(raw)
         except Exception as e:  # noqa: BLE001
             # 审查环节失败（限流/网络/解析）→ 保守放行，避免阻断建模

@@ -50,6 +50,8 @@ class AgentResult:
     errors: list[str] = field(default_factory=list)
     fix_rounds: int = 0
     review_rounds: int = 0
+    #: 审查各轮得分演进走势 (如 [0.3, 0.7, 0.95])
+    score_trajectory: list[float] = field(default_factory=list)
     #: 生成的独立 HTML 3D 网页交互查看器路径
     viewer_html: Optional[str] = None
     #: 最后一次审查结论（含 match/score/issues/verdict）
@@ -239,6 +241,7 @@ class OpenscadAgent:
             preview_png=preview_png, viewer_html=viewer_html,
             errors=errors, fix_rounds=rounds,
             review_rounds=review_rounds, review=self.last_review,
+            score_trajectory=getattr(self, "score_trajectory", []),
         )
 
     # ------------------------------------------------------------------
@@ -283,16 +286,26 @@ class OpenscadAgent:
             )
             extra_views = [p for p in extra_views if p != main_png]
 
+        # 连续会话上下文记忆 (Conversational Review Chain)
+        conversation_history: list[dict[str, Any]] = []
+        score_trajectory: list[float] = []
+
         for i in range(1, max_review + 1):
-            _log.info("[review] 审查渲染图 (round %d/%d, %d 视角) …", i, max_review, len(extra_views) + 1)
+            _log.info("[review] 审查渲染图 (round %d/%d, %d 视角, 会话记忆模式) …", i, max_review, len(extra_views) + 1)
             verdict = self.vision.review_preview(
-                original_image, main_png, spec, user_hint=hint, extra_views=extra_views or None
+                original_image, main_png, spec, user_hint=hint,
+                extra_views=extra_views or None,
+                conversation_history=conversation_history,
+                round_index=i,
             )
             if verdict.get("skipped"):
                 _log.info("[review] %s", verdict.get('verdict'))
                 break
             cur_score = float(verdict.get("score", 0.0) or 0.0)
-            _log.info("[review] match=%s score=%s | %s", verdict.get('match'), cur_score, verdict.get('verdict'))
+            score_trajectory.append(cur_score)
+            self.score_trajectory = score_trajectory
+            traj_str = " -> ".join(str(s) for s in score_trajectory)
+            _log.info("[review] match=%s score=%s (演进走势: %s) | %s", verdict.get('match'), cur_score, traj_str, verdict.get('verdict'))
             if verdict.get("match"):
                 # 符合预期，成功收敛
                 best_score = cur_score
