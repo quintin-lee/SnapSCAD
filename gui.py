@@ -45,7 +45,7 @@ class BuildWorker(QThread):
     def __init__(self, agent: OpenscadAgent, image: Optional[str],
                  description: str, hint: str, review: bool = True, parent=None) -> None:
         super().__init__(parent)
-        self.agent = agent
+        self.agent = agent  # agent 已在主线程构造完成且参数已写入，worker 只读
         self.image = image
         self.description = description
         self.hint = hint
@@ -373,8 +373,10 @@ class MainWindow(QMainWindow):
             return
 
         agent = OpenscadAgent(config)
+        # 所有可变 agent 参数在主线程一次性写入，worker 只读，避免竞态
         agent.max_fix_rounds = self.spn_fix_rounds.value()
         agent.max_review_rounds = self.spn_review_rounds.value()
+        agent.enable_multi_view = self.chk_review.isChecked()  # 审查开启时才做多视角
         review = self.chk_review.isChecked() and bool(image)  # 仅图片场景可审查（需原图比对）
         self._worker = BuildWorker(agent, image, desc, hint, review=review, parent=self)
         self._worker.log_signal.connect(self.log)

@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default="https://apihub.agnes-ai.com",
                    help="OpenAI 兼容 API 端点 (可切换其他视觉 LLM)")
     p.add_argument("--no-review", action="store_true", help="跳过渲染图审查闭环 (默认开启)")
+    p.add_argument("--no-multi-view", action="store_true", help="审查时不做多视角渲染 (默认开启)")
     p.add_argument("--no-render", action="store_true", help="跳过 3D/预览渲染, 仅生成 .scad")
     p.add_argument("--preview-only", action="store_true", help="仅渲染 2D 预览, 跳过 3D 导出")
     p.add_argument("--max-image-side", type=int, default=2048, help="图片预处理最大边长")
@@ -64,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     agent = OpenscadAgent(config)
+    agent.enable_multi_view = not args.no_multi_view
     if args.image:
         result = agent.build_from_image(args.image, hint=args.hint, review=not args.no_review)
     else:
