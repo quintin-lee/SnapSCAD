@@ -202,7 +202,7 @@ class OpenscadRenderer:
 
             try:
                 html_path = out_path.with_name(f"{out_path.stem}_viewer.html")
-                generate_html_viewer(out_path, html_path, model_name=out_path.stem)
+                generate_html_viewer(out_path, html_path, model_name=out_path.stem, scad_path=scad_path)
             except Exception as e:  # noqa: BLE001
                 _log.warning("[render] 生成 3D 网页查看器失败: %s", e)
         return out_path
@@ -566,13 +566,22 @@ def spec_to_json(spec: dict[str, Any]) -> str:
     return json.dumps(spec, ensure_ascii=False, indent=2)
 
 
-def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") -> Path:
+def generate_html_viewer(
+    stl_path: Path,
+    html_path: Path,
+    model_name: str = "",
+    spec: Optional[dict[str, Any]] = None,
+    scad_path: Optional[Path] = None,
+) -> Path:
     """生成内嵌 STL 模型的独立便携式 3D 网页交互查看器。
 
     基于 Three.js + OrbitControls，将 STL 数据以 base64 嵌入 HTML，
-    可直接双击通过 file:/// 离线打开，支持鼠标 360° 旋转、缩放、平移、线框、调色。
+    支持多零件独立真实色彩渲染、装配树显隐控制、360°旋转、空间尺寸标定与截面剖切。
     """
     import base64
+    import json
+    import shutil
+
     stl_path = Path(stl_path)
     html_path = Path(html_path)
     html_path.parent.mkdir(parents=True, exist_ok=True)
@@ -580,6 +589,51 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
 
     raw_bytes = stl_path.read_bytes()
     b64_stl = base64.b64encode(raw_bytes).decode("ascii")
+
+    # 尝试加载 spec 与 scad，提取各零件生成多色分件装配数据
+    if spec is None:
+        cand_spec = stl_path.with_name(f"{stl_path.stem}_spec.json")
+        if cand_spec.exists():
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            except Exception:
+                spec = None
+
+    if scad_path is None:
+        cand_scad = stl_path.with_name(f"{stl_path.stem}.scad")
+        if cand_scad.exists():
+            scad_path = cand_scad
+
+    parts_json_list: list[dict[str, Any]] = []
+    if spec and scad_path and Path(scad_path).exists():
+        parts = spec.get("parts") or []
+        if 1 < len(parts) <= 12:
+            tmp_p_dir = html_path.parent / f"_b64tmp_{stl_path.stem}"
+            tmp_p_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                for p_item in parts:
+                    pid = str(p_item.get("id", ""))
+                    if not pid:
+                        continue
+                    color_raw = p_item.get("color", "#38bdf8")
+                    if isinstance(color_raw, list):
+                        color_str = f"rgb({int(color_raw[0]*255)}, {int(color_raw[1]*255)}, {int(color_raw[2]*255)})"
+                    else:
+                        color_str = str(color_raw)
+                    wrap_scad = tmp_p_dir / f"w_{pid}.scad"
+                    wrap_stl = tmp_p_dir / f"{pid}.stl"
+                    wrap_scad.write_text(f"use <{Path(scad_path).resolve()}>\n{pid}();\n", encoding="utf-8")
+                    code, _, _ = run_cmd(["openscad", "-o", str(wrap_stl), "--export-format=binstl", str(wrap_scad)])
+                    if code == 0 and wrap_stl.exists():
+                        p_b64 = base64.b64encode(wrap_stl.read_bytes()).decode("ascii")
+                        parts_json_list.append({"id": pid, "color": color_str, "b64": p_b64})
+            except Exception as e:
+                _log.warning("[viewer] 分件多色导出失败，回退单色模式: %s", e)
+                parts_json_list = []
+            finally:
+                shutil.rmtree(tmp_p_dir, ignore_errors=True)
+
+    parts_json_str = json.dumps(parts_json_list)
 
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -601,6 +655,13 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
   .toolbar button.active {{ background: #2563eb; font-weight: 600; }}
   .toolbar input[type="color"] {{ width: 28px; height: 28px; border: none; border-radius: 50%; cursor: pointer; background: transparent; }}
   .tip {{ position: absolute; bottom: 20px; right: 20px; font-size: 11px; color: #64748b; background: rgba(15,23,42,0.6); padding: 4px 10px; border-radius: 6px; }}
+
+  /* 零件装配树列表 */
+  .part-tree-hdr {{ font-size: 11px; font-weight: 700; color: #94a3b8; margin: 10px 0 4px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 6px; display: none; }}
+  .part-tree {{ max-height: 140px; overflow-y: auto; display: none; flex-direction: column; gap: 4px; margin-top: 4px; }}
+  .part-item {{ font-size: 11px; display: flex; align-items: center; justify-content: space-between; padding: 2px 4px; border-radius: 4px; }}
+  .part-item:hover {{ background: rgba(255,255,255,0.06); }}
+  .color-dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin: 0 4px; border: 1px solid rgba(255,255,255,0.2); }}
 
   /* 浅色摄影棚主题 */
   body.light-mode {{ background: radial-gradient(circle at center, #ffffff 0%, #cbd5e1 100%); color: #0f172a; }}
@@ -625,6 +686,8 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
   <p>OpenSCAD Agent 3D 模型</p>
   <div class="stat" id="stat-tri">三角形面数: 加载中…</div>
   <div class="stat" id="stat-dim">包围盒尺寸: 加载中…</div>
+  <div class="part-tree-hdr" id="part-tree-hdr">零件装配树:</div>
+  <div class="part-tree" id="part-tree"></div>
 </div>
 <div class="toolbar">
   <button id="btn-rotate" class="active">🔄 旋转</button>
@@ -645,6 +708,7 @@ def generate_html_viewer(stl_path: Path, html_path: Path, model_name: str = "") 
 
 <script>
 const STL_BASE64 = "{b64_stl}";
+const PARTS_DATA = {parts_json_str};
 
 function parseSTL(buffer) {{
   const data = new DataView(buffer);
@@ -719,31 +783,75 @@ window.addEventListener('DOMContentLoaded', () => {{
   dir2.position.set(-100, -100, -50);
   scene.add(dir2);
 
-  // 解码 STL
-  const binStr = atob(STL_BASE64);
-  const bytes = new Uint8Array(binStr.length);
-  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
-  const {{ geom, count }} = parseSTL(bytes.buffer);
+  // 解码 STL 与多零件装配
+  const allMeshes = [];
+  let totalCount = 0;
+  const group = new THREE.Group();
+  scene.add(group);
 
-  geom.computeBoundingBox();
-  const box = geom.boundingBox;
+  if (PARTS_DATA && PARTS_DATA.length > 0) {{
+    const treeEl = document.getElementById('part-tree');
+    const treeHdr = document.getElementById('part-tree-hdr');
+    if (treeEl) treeEl.style.display = 'flex';
+    if (treeHdr) treeHdr.style.display = 'block';
+
+    PARTS_DATA.forEach(p => {{
+      const bStr = atob(p.b64);
+      const bArr = new Uint8Array(bStr.length);
+      for (let i = 0; i < bStr.length; i++) bArr[i] = bStr.charCodeAt(i);
+      const {{ geom, count }} = parseSTL(bArr.buffer);
+      totalCount += count;
+
+      const mat = new THREE.MeshStandardMaterial({{
+        color: new THREE.Color(p.color || '#38bdf8'),
+        metalness: 0.2,
+        roughness: 0.4,
+        side: THREE.DoubleSide
+      }});
+      const m = new THREE.Mesh(geom, mat);
+      m.name = p.id;
+      allMeshes.push(m);
+      group.add(m);
+
+      if (treeEl) {{
+        const row = document.createElement('div');
+        row.className = 'part-item';
+        row.innerHTML = `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1;">
+            <input type="checkbox" checked data-id="${{p.id}}">
+            <span class="color-dot" style="background:${{p.color}}"></span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${{p.id}}</span>
+          </label>
+        `;
+        row.querySelector('input').addEventListener('change', (e) => {{
+          m.visible = e.target.checked;
+        }});
+        treeEl.appendChild(row);
+      }}
+    }});
+  }} else {{
+    const binStr = atob(STL_BASE64);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    const {{ geom, count }} = parseSTL(bytes.buffer);
+    totalCount = count;
+    const material = new THREE.MeshStandardMaterial({{
+      color: 0x38bdf8,
+      metalness: 0.2,
+      roughness: 0.4,
+      side: THREE.DoubleSide
+    }});
+    const mesh = new THREE.Mesh(geom, material);
+    allMeshes.push(mesh);
+    group.add(mesh);
+  }}
+
+  const box = new THREE.Box3().setFromObject(group);
   const size = new THREE.Vector3();
   box.getSize(size);
   const center = new THREE.Vector3();
   box.getCenter(center);
-
-  // 居中
-  geom.center();
-
-  // 材质
-  const material = new THREE.MeshStandardMaterial({{
-    color: 0x38bdf8,
-    metalness: 0.2,
-    roughness: 0.4,
-    side: THREE.DoubleSide
-  }});
-  const mesh = new THREE.Mesh(geom, material);
-  scene.add(mesh);
+  group.position.sub(center);
 
   // 网格底盘
   const maxDim = Math.max(size.x, size.y, size.z, 50);
@@ -758,7 +866,7 @@ window.addEventListener('DOMContentLoaded', () => {{
   controls.update();
 
   // HUD 信息
-  document.getElementById('stat-tri').textContent = `三角形面数: ${{count.toLocaleString()}}`;
+  document.getElementById('stat-tri').textContent = `三角形面数: ${{totalCount.toLocaleString()}}`;
   document.getElementById('stat-dim').textContent = `尺寸: ${{size.x.toFixed(1)}} × ${{size.y.toFixed(1)}} × ${{size.z.toFixed(1)}} mm`;
 
   // 工具栏交互
@@ -770,8 +878,8 @@ window.addEventListener('DOMContentLoaded', () => {{
 
   const btnWire = document.getElementById('btn-wire');
   btnWire.addEventListener('click', () => {{
-    material.wireframe = !material.wireframe;
-    btnWire.classList.toggle('active', material.wireframe);
+    allMeshes.forEach(m => m.material.wireframe = !m.material.wireframe);
+    btnWire.classList.toggle('active', allMeshes[0]?.material.wireframe);
   }});
 
   // 实时内部截面剖切 (Cross-Section Clipping Plane)
@@ -793,10 +901,12 @@ window.addEventListener('DOMContentLoaded', () => {{
     clipPanel.style.display = isClipping ? 'flex' : 'none';
     if (isClipping) {{
       clipPlane.constant = parseFloat(clipSlider.value);
-      material.clippingPlanes = [clipPlane];
-      material.clipShadows = true;
+      allMeshes.forEach(m => {{
+        m.material.clippingPlanes = [clipPlane];
+        m.material.clipShadows = true;
+      }});
     }} else {{
-      material.clippingPlanes = [];
+      allMeshes.forEach(m => m.material.clippingPlanes = []);
     }}
   }});
 
@@ -807,7 +917,7 @@ window.addEventListener('DOMContentLoaded', () => {{
   }});
 
   // 三维空间尺寸标定盒 (3D Dimension Bounding Box)
-  const boxHelper = new THREE.Box3Helper(new THREE.Box3().setFromObject(mesh), 0x38bdf8);
+  const boxHelper = new THREE.Box3Helper(new THREE.Box3().setFromObject(group), 0x38bdf8);
   boxHelper.visible = false;
   scene.add(boxHelper);
 
@@ -826,7 +936,7 @@ window.addEventListener('DOMContentLoaded', () => {{
   }});
 
   document.getElementById('picker-color').addEventListener('input', (e) => {{
-    material.color.set(e.target.value);
+    allMeshes.forEach(m => m.material.color.set(e.target.value));
   }});
 
   // 浅色影棚 / 暗黑空间主题切换
