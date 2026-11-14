@@ -87,12 +87,18 @@ class OpenscadAgent:
         try:
             spec = self.vision.recognize(prep_path, user_hint=hint)
         except (SpecParseError, RuntimeError) as e:
+            _rm_quiet(prep_path)
+            _rm_empty_dir(prep_path.parent)
             return AgentResult(success=False, errors=[f"识别/解析失败: {e}"])
 
-        return self._finalize(
+        result = self._finalize(
             spec, tag=image.stem, render=True, hint=hint, image_name=image.name,
             review=review, original_image=prep_path,
         )
+        # 识别完成后删除临时预处理图 (避免 out/_prep 反复累积)
+        _rm_quiet(prep_path)
+        _rm_empty_dir(prep_path.parent)
+        return result
 
     def build_from_description(self, description: str) -> AgentResult:
         """纯文字描述建模（无图片场景）。无原图可比对，不启用审查闭环。"""
@@ -177,21 +183,24 @@ class OpenscadAgent:
 
         # 6. 审查闭环：渲染图 vs 原图，不符合则自动修正重渲染
         review_rounds = 0
+        spec_before_review = json.dumps(spec, sort_keys=True)  # 快照, 判断 spec 是否被审查修改
         if review and original_image is not None and preview_png and Path(preview_png).exists():
             self.last_review = None
             review_rounds = self._review_loop(spec, scad_path, safe, original_image,
                                                preview_png, hint, model_file)
-            # spec 可能已在闭环中被修改，重新落盘并渲染最终结果
-            spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
-            scad_path = Path(scad_path_str)
-            out_dir = Path(self.config.output_dir)
-            model_file = str(out_dir / f"{safe}.{self.config.export_format}")
-            preview_png = str(out_dir / f"{safe}_preview.png")
-            try:
-                self.renderer.export_model(scad_path, Path(model_file))
-                self.renderer.render_preview(scad_path, Path(preview_png))
-            except RuntimeError as e:
-                errors.append(f"审查后重新渲染失败: {e}")
+            # 仅当审查闭环实际修改了 spec 时, 才重新落盘+渲染 (否则首轮已渲染过, 避免重复)
+            spec_changed = json.dumps(spec, sort_keys=True) != spec_before_review
+            if spec_changed:
+                spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
+                scad_path = Path(scad_path_str)
+                out_dir = Path(self.config.output_dir)
+                model_file = str(out_dir / f"{safe}.{self.config.export_format}")
+                preview_png = str(out_dir / f"{safe}_preview.png")
+                try:
+                    self.renderer.export_model(scad_path, Path(model_file))
+                    self.renderer.render_preview(scad_path, Path(preview_png))
+                except RuntimeError as e:
+                    errors.append(f"审查后重新渲染失败: {e}")
 
         _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
@@ -355,3 +364,23 @@ class OpenscadAgent:
         except Exception as e:  # noqa: BLE001
             _log.warning("[agent] 修正请求异常: %s，保留原 spec", e)
             return spec
+
+
+def _rm_quiet(path: Path) -> None:
+    """静默删除文件（不存在/失败均忽略）。用于清理 _prep 临时预处理图。"""
+    try:
+        p = Path(path)
+        if p.exists():
+            p.unlink()
+    except OSError:
+        pass
+
+
+def _rm_empty_dir(path: Path) -> None:
+    """若目录已空则删除（失败忽略）。用于清理 out/_prep 空目录。"""
+    try:
+        p = Path(path)
+        if p.exists() and not any(p.iterdir()):
+            p.rmdir()
+    except OSError:
+        pass
