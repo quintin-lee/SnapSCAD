@@ -205,21 +205,37 @@ class AgnesVision:
         preview_image: Path,
         spec: dict[str, Any],
         user_hint: str = "",
+        extra_views: Optional[list[Path]] = None,
     ) -> dict[str, Any]:
-        """审查渲染图：回传原图 + 预览图 + 当前规格，让 LLM 判断是否吻合。
+        """审查渲染图：回传原图 + 预览图（可多视角）+ 当前规格，让 LLM 判断是否吻合。
 
+        extra_views: 额外的多视角预览图路径（可选），用于多角度比对。
         返回 dict，至少含 {match: bool, score: float, issues: list, verdict: str}。
         若 LLM 限流/不可用或解析失败，返回 {"match": True, "skipped": True, ...}
         以便流程不中断（保守放行，避免死循环）。
         """
         orig_url = self._image_data_url(original_image)
         prev_url = self._image_data_url(preview_image)
+        # 预览图主图
+        preview_imgs = [prev_url]
+        view_labels = ["主视角"]
+        if extra_views:
+            for i, v in enumerate(extra_views):
+                try:
+                    preview_imgs.append(self._image_data_url(v))
+                    view_labels.append(f"视角{i + 1}")
+                except Exception:  # noqa: BLE001
+                    continue
+
         content: list[dict[str, Any]] = [
             {"type": "text",
              "text": f"当前规格:\n{json.dumps(spec, ensure_ascii=False)[:3000]}"},
             {"type": "image_url", "image_url": {"url": orig_url}},
-            {"type": "image_url", "image_url": {"url": prev_url}},
+            {"type": "text", "text": "以下是渲染预览图（多角度）:"},
         ]
+        for label, url in zip(view_labels, preview_imgs):
+            content.append({"type": "text", "text": f"[{label}]"})
+            content.append({"type": "image_url", "image_url": {"url": url}})
         if user_hint:
             content.insert(0, {"type": "text", "text": f"用户补充说明: {user_hint}"})
 

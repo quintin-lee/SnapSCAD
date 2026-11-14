@@ -61,6 +61,8 @@ class OpenscadAgent:
         self.renderer = OpenscadRenderer(config)
         self.max_fix_rounds = 3      # 编译错误自动修正上限
         self.max_review_rounds = 3   # 渲染图审查自动修正上限
+        self.review_views = OpenscadRenderer.VIEWS  # 审查时渲染的视角
+        self.enable_multi_view = True              # 是否开启多视角审查
         self.last_review: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------
@@ -214,12 +216,35 @@ class OpenscadAgent:
         """
         out_dir = Path(self.config.output_dir)
         max_review = getattr(self, "max_review_rounds", 3)
+        # 多视角渲染：除主预览外额外渲 top/front/iso，审查时多角度回传 LLM
+        views = getattr(self, "review_views", OpenscadRenderer.VIEWS)
         best_spec = spec          # 记录迄今最好的一版（部件数最多且不编译失败）
         best_score = -1.0
+
+        def _render_views(scad: Path):
+            """渲染主预览 + 多视角，导出 3D 模型，返回 (主预览png, [额外视角pngs])。"""
+            safe2 = scad.stem.replace("_scad", "")  # 去后缀安全名
+            self.renderer.export_model(scad, Path(out_dir / f"{safe2}.{self.config.export_format}"))
+            main_png = out_dir / f"{safe2}_preview.png"
+            self.renderer.render_preview(scad, main_png)
+            extra = self.renderer.render_multi_view(
+                scad, main_png.with_name(f"{safe2}_v"), views=views, size=(500, 400)
+            )
+            return main_png, [p for p in extra if p != main_png]
+
+        # 首轮渲染（若 _finalize 已渲染过 preview_png，直接复用其多视角）
+        main_png = Path(preview_png)
+        extra_views: list = []
+        if self.enable_multi_view:
+            extra_views = self.renderer.render_multi_view(
+                scad_path, main_png.with_name(main_png.stem + "_v"), views=views, size=(500, 400)
+            )
+            extra_views = [p for p in extra_views if p != main_png]
+
         for i in range(1, max_review + 1):
-            print(f"[review] 审查渲染图 (round {i}/{max_review})…")
+            print(f"[review] 审查渲染图 (round {i}/{max_review}, {len(extra_views) + 1} 视角) …")
             verdict = self.vision.review_preview(
-                original_image, Path(preview_png), spec, user_hint=hint
+                original_image, main_png, spec, user_hint=hint, extra_views=extra_views or None
             )
             if verdict.get("skipped"):
                 print(f"[review] {verdict.get('verdict')}")
@@ -250,13 +275,11 @@ class OpenscadAgent:
                 self.last_review = verdict
                 break
 
-            # 回归保护：若 LLM 修正规格使部件数减少（简化而非补全）→ 拒绝该修正，
-            # 避免 LLM 越改越简单。仅在部件数未减少时才接受。
+            # 回归保护：若 LLM 修正规格使部件数减少（简化而非补全）→ 拒绝该修正
             old_cnt = len(spec.get("parts", []))
             new_cnt = len(new_spec.get("parts", []))
             if new_cnt < old_cnt:
                 print(f"[review] LLM 修正减少部件数 ({old_cnt}->{new_cnt})，视为回归，拒绝并停止")
-                # 回退到迄今最好的 spec
                 spec.clear()
                 spec.update(best_spec)
                 self.last_review = verdict
@@ -272,9 +295,11 @@ class OpenscadAgent:
                 print(f"[review] 修正后 spec 编译失败: {cerr[:300]}，停止")
                 self.last_review = verdict
                 break
+            # 重渲染主预览 + 多视角
             try:
-                self.renderer.export_model(new_scad, Path(out_dir / f"{safe2}.{self.config.export_format}"))
-                self.renderer.render_preview(new_scad, Path(preview_png))
+                new_main, new_extra = _render_views(new_scad)
+                main_png = new_main
+                extra_views = new_extra if self.enable_multi_view else []
             except RuntimeError as e:
                 print(f"[review] 重渲染失败: {e}，停止")
                 self.last_review = verdict

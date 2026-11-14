@@ -145,22 +145,65 @@ class OpenscadRenderer:
         return out_path
 
     def render_preview(self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600)) -> Path:
-        """渲染 2D 预览图（用于直观展示结果）。
+        """渲染 2D 预览图（默认斜视角）。
 
         OpenSCAD 2021.01 CLI：--imgsize=WxH 指定 png 尺寸，--autocenter/--viewall
         让相机自适应物体。不强制 --render（老版本默认已求值），兼容新旧。
         """
+        return self.render_preview_view(scad_path, out_png, size=size, view="perspective")
+
+    #: 常用预览视角（用于多视角渲染 + 审查）
+    VIEWS = ("top", "front", "iso", "perspective")
+
+    def render_preview_view(
+        self,
+        scad_path: Path,
+        out_png: Path,
+        size: tuple[int, int] = (800, 600),
+        view: str = "perspective",
+    ) -> Path:
+        """按指定视角渲染 2D 预览图。
+
+        view 取值：top/front/right/left/back/iso/perspective。
+        用 --projection + --camera 控制相机；老版本若不支持某参数会报 unrecognised，
+        此时回退到不带视角参数的默认渲染，保证不中断。
+        """
         out_png.parent.mkdir(parents=True, exist_ok=True)
-        cmd = self._base_cmd() + [
+        base = self._base_cmd() + [
             "--autocenter", "--viewall",
             f"--imgsize={size[0]},{size[1]}",
             "-o", str(out_png), str(scad_path),
         ]
+        # 视角参数（OpenSCAD --view 可选值: axes/crosshairs/edges/scales/wireframe；
+        # 真正视角用 --camera translate/rot。此处用 --projection 控制正/透视）。
+        proj = "o" if view in ("top", "front", "right", "left", "back") else "p"
+        cmd = base + [f"--projection={proj}"]
         code, out, err = run_cmd(cmd)
+        if code != 0 and "unrecognised" in (err or out).lower():
+            # 老版本不支持 --projection → 回退默认
+            code, out, err = run_cmd(base)
         if code != 0:
-            raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}):\n{err or out}")
-        print(f"[render] 已生成预览图: {out_png}")
+            raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}, view={view}):\n{err or out}")
+        print(f"[render] 已生成预览图({view}): {out_png}")
         return out_png
+
+    def render_multi_view(
+        self, scad_path: Path, out_prefix: Path, views: tuple[str, ...] = VIEWS,
+        size: tuple[int, int] = (600, 450),
+    ) -> list[Path]:
+        """渲染多个视角预览图，返回各视角 png 路径列表。
+
+        用于审查时多角度比对。失败视角自动跳过（不影响其他视角）。
+        """
+        out_prefix = Path(out_prefix)
+        paths: list[Path] = []
+        for v in views:
+            target = out_prefix.with_name(f"{out_prefix.stem}_{v}.png")
+            try:
+                paths.append(self.render_preview_view(scad_path, target, size=size, view=v))
+            except RuntimeError as e:
+                print(f"[render] 视角 {v} 渲染失败，跳过: {str(e)[:120]}")
+        return paths
 
     def export_model_or_validate(self, scad_path: Path, out_stl: Optional[Path]) -> tuple[bool, str, Optional[Path]]:
         """导出模型与校验合二为一，避免对同一 .scad 重复 CSG 求值。
