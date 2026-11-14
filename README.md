@@ -40,6 +40,9 @@
 - **高阶草图拉伸与阵列**：支持 2D polygon 直拉伸 (`linear_extrude`)、回转体 (`rotate_extrude`) 与环形/线性等距阵列 (`radial_array` / `linear_array`)。
 - **3D 网页端实时截面剖切**：独立 HTML 查看器提供 Z 轴动态切片滑块，直观检查内部内腔与壁厚。
 - **桌面级历史工程资产库**：GUI 自动归集所有历史生成模型，一键秒级全景回溯规格、源码与 3D 效果。
+- **激光切割/CNC 2D投影导出**：支持一键将三维模型投射导出为工业标准 `.dxf` 与 `.svg`，无缝衔接激光切割机与 CNC 雕刻机。
+- **多模型生态与本地离线免Key运行**：自动识别 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`，并原生支持本地 Ollama / vLLM（指向 `localhost:11434` 自动免 Key 离线保密运行）。
+- **工业化批量生产流水线**：CLI 支持 `--batch-dir` 自动对目录下的海量设计图连续建模并汇总至 3D 展厅画廊。
 - **零第三方渲染依赖**：只调用系统 `openscad` 与 `magick` 可执行文件。
 
 ## 依赖
@@ -81,7 +84,10 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 # 4) 只生成 .scad 不渲染
 .venv/bin/python main.py -i photo.jpg --no-render
 
-# 5) 一键生成或更新 3D 模型展厅画廊
+# 5) 批量图片工业化建模流水线
+.venv/bin/python main.py --batch-dir ./my_sketches/ -o ./out_batch
+
+# 6) 一键生成或更新 3D 模型展厅画廊
 .venv/bin/python main.py --gallery
 
 # 查看 LLM 识别用的系统提示词/规格 schema
