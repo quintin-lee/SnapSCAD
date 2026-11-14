@@ -1,5 +1,11 @@
 # SnapSCAD
 
+[![CI](https://github.com/quintin-lee/SnapSCAD/actions/workflows/ci.yml/badge.svg)](https://github.com/quintin-lee/SnapSCAD/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![OpenSCAD](https://img.shields.io/badge/OpenSCAD-2021.01+-orange.svg)](https://openscad.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/quintin-lee/SnapSCAD/pulls)
+
 > **Turn photos into parametric OpenSCAD models in a snap.**  
 > 随手一拍，即刻代码造物。
 
@@ -66,6 +72,7 @@
 - **3D 网页端多零件分色装配与交互零件树**：独立 HTML 查看器支持按每个部件独立真实语义色彩渲染，侧边栏内置零件装配树与实时 `[👁️]` 显隐复选框。
 - **规格树与源码双向联动高亮**：GUI 中单击树形规格中的部件节点，代码编辑器自动平滑定位并亮蓝高亮对应的 `module <id>()` 定义。
 - **装配空间干涉与碰撞自检**：体检系统自动测算多部件之间的包围盒空间侵入体积与贴合接触面积，预防意外几何穿透。
+- **Canny 物理几何边缘轮廓并联**：自动提取高反差物理轮廓图并送入多模态大模型，彻底消除反光与阴影纹理干扰，直击机械物理轮廓与孔位边界。
 - **源码版本快照与一键回滚**：编辑区支持保存多版本增量快照 (`_v1.scad`, `_v2.scad`)，并提供时间戳选择器一键快速撤销回退。
 - **零第三方渲染依赖**：只调用系统 `openscad` 与 `magick` 可执行文件。
 
@@ -76,11 +83,12 @@
 sudo pacman -S openscad imagemagick   # Manjaro/Arch
 ```
 
-Python（建议虚拟环境，仅标准库 + requests）：
+Python（建议虚拟环境，支持标准 pip 安装）：
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install requests
+.venv/bin/python -m pip install -e .
 ```
+安装后即可直接全局调用 `snapscad` (CLI) 或 `snapscad-gui` (GUI) 命令！
 
 ## 配置
 
