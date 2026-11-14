@@ -100,12 +100,14 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-2.0-flash`�
 
 | 文件 | 职责 |
 | --- | --- |
-| `openscad_agent/core.py` | 配置、OpenSCAD 渲染器、图片预处理、规格 schema |
-| `openscad_agent/vision.py` | Agnes 视觉 API 客户端 + JSON 规格解析/容错 |
-| `openscad_agent/geometry.py` | 规格 → OpenSCAD 源码转译 |
-| `openscad_agent/agent.py` | 全流程编排 + 自动修复回路 |
+| `openscad_agent/core.py` | 配置、OpenSCAD 渲染器（多视角/精度控制）、图片预处理 |
+| `openscad_agent/spec.py` | 规格校验与规范化层（类型净化/缺省补全/原语别名） |
+| `openscad_agent/geometry.py` | 规格 → OpenSCAD 源码转译（支持 rotation / polyhedron 真顶点） |
+| `openscad_agent/vision.py` | Agnes 视觉 API 客户端 + 渲染图多视角审查闭环 |
+| `openscad_agent/agent.py` | 全流程编排 + 编译修复 + 审查闭环（回归保护/得分回退） |
+| `openscad_agent/log.py` | 统一日志系统（控制台 + `out/agent.log` 文件落盘） |
 | `main.py` | CLI 入口 |
-| `gui.py` | PyQt6 图形界面入口 |
+| `gui.py` | PyQt6 图形界面（原图 vs 预览并排、参数持久化） |
 
 ## 规格 JSON 结构
 
@@ -136,5 +138,5 @@ LLM 输出的中间表示（完整 schema 见 `core.SPEC_SCHEMA`）：
 ## 已知限制
 
 - LLM 对复杂自由曲面只能做 CSG 近似（已在规格 `note` 字段标注近似方式）。
-- 识别精度依赖图片质量；多视角照片效果更佳（当前为单图输入）。
-- `polyhedron` 在规格中会被转译器降级为 box，避免手写顶点表出错。
+- 识别精度依赖图片质量；审查闭环支持多视角比对（top/front/iso/perspective）。
+- `polyhedron` 支持 LLM 直接输出 `points`/`faces` 顶点数据驱动真实几何；数据缺失或非法时降级为 box。
