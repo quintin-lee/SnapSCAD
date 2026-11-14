@@ -267,14 +267,35 @@ def _apply_array_wrapper(lines: list[str], item: dict[str, Any], indent: str = "
     return lines
 
 
+def _counterbore_code(hole: dict[str, Any], center: list[float]) -> list[str]:
+    """生成工业标准公制阶梯沉头螺栓孔 (M2~M8) 代码。"""
+    from .spec import METRIC_FASTENERS
+    std = str(hole.get("standard", "M3")).upper()
+    d_screw, d_head, h_head = METRIC_FASTENERS.get(std, (3.4, 6.2, 3.2))
+    size = hole.get("size") or []
+    h = float(hole.get("height", size[1] if len(size) >= 2 else 10.0))
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    lines = [f"      // ISO/DIN {std} 阶梯沉头螺栓孔 (通孔d={d_screw}mm, 沉孔d={d_head}mm 深={h_head}mm)"]
+    lines.append(f"      translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz - 0.5)}]) {{")
+    lines.append(f"        cylinder(h = {_fmt(h + 1.0)}, d = {_fmt(d_screw)}, center = false);")
+    lines.append(f"        translate([0, 0, {_fmt(max(h + 0.5 - h_head, 0))}])")
+    lines.append(f"          cylinder(h = {_fmt(h_head + 1.0)}, d = {_fmt(d_head)}, center = false);")
+    lines.append("      }")
+    return lines
+
+
 def _hole_code(hole: dict[str, Any]) -> list[str]:
-    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阵列）。"""
+    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阶梯沉头孔与阵列）。"""
     prim = hole.get("primitive", "cube")
-    size = _normalize_hole_size(prim, hole)
     center = hole.get("center", [0, 0, 0])
-    body = _part_body(prim, size, center, "hole")
-    lines = [f"    // hole: {prim} {size} @ {center}"]
-    lines += [f"      {l}" if l else l for l in body]
+    if prim == "counterbore" or hole.get("standard"):
+        lines = _counterbore_code(hole, center)
+    else:
+        size = _normalize_hole_size(prim, hole)
+        body = _part_body(prim, size, center, "hole")
+        lines = [f"    // hole: {prim} {size} @ {center}"]
+        lines += [f"      {l}" if l else l for l in body]
     return _apply_array_wrapper(lines, hole, indent="    ")
 
 

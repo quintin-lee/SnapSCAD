@@ -23,13 +23,24 @@ _log = _log_module()
 #: 合法原语名（含 LLM 常见别名）
 PRIMITIVES = {
     "cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull",
-    "linear_extrude", "rotate_extrude",
+    "linear_extrude", "rotate_extrude", "counterbore",
 }
 #: 原语别名 → 标准名
 _ALIAS = {
     "cuboid": "cube", "box": "cube",
     "extrude": "linear_extrude",
     "lathe": "rotate_extrude", "revolve": "rotate_extrude",
+}
+
+#: ISO / DIN 标准公制紧固件阶梯沉头孔尺寸映射: {标称: (通孔直径d_screw, 沉头直径d_head, 沉头深h_head)}
+METRIC_FASTENERS: dict[str, tuple[float, float, float]] = {
+    "M2": (2.4, 4.4, 2.2),
+    "M2.5": (2.9, 5.0, 2.7),
+    "M3": (3.4, 6.2, 3.2),
+    "M4": (4.5, 8.0, 4.2),
+    "M5": (5.5, 10.0, 5.2),
+    "M6": (6.6, 11.5, 6.2),
+    "M8": (9.0, 15.0, 8.2),
 }
 
 
@@ -171,10 +182,19 @@ def _normalize_hole(hole: dict[str, Any]) -> dict[str, Any]:
         return {"primitive": "cube"}
     prim = _ALIAS.get(str(hole.get("primitive", "cube")).lower(),
                       str(hole.get("primitive", "cube")).lower())
+    # 工业标准阶梯沉头孔识别 (如 standard: "M3")
+    std = str(hole.get("standard", hole.get("counterbore", hole.get("bolt", "")))).strip().upper()
+    if std in METRIC_FASTENERS or prim == "counterbore":
+        prim = "counterbore"
+        if std not in METRIC_FASTENERS:
+            std = "M3"
+
     if prim not in PRIMITIVES:
         prim = "cube"
     out = dict(hole)  # 保留 LLM 原字段
     out["primitive"] = prim
+    if prim == "counterbore":
+        out["standard"] = std
     out["center"] = _as_vec3(hole.get("center"), (0.0, 0.0, 0.0))
     out["size"] = normalize_hole_size(prim, hole)
     if "radial_array" in hole:
