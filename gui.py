@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings, QUrl
-from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices, QKeySequence
+from PyQt6.QtCore import QThread, Qt, pyqtSignal, QSettings, QUrl, QRegularExpression
+from PyQt6.QtGui import QPixmap, QFont, QColor, QDesktopServices, QKeySequence, QSyntaxHighlighter, QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QGroupBox,
@@ -31,6 +31,79 @@ from PyQt6.QtWidgets import (
 
 from openscad_agent import AgentConfig, OpenscadAgent, OpenscadRenderer
 from openscad_agent.vision import AgnesVision, SpecParseError
+
+
+# ---------------------------------------------------------------------------
+# OpenSCAD 语法高亮器
+# ---------------------------------------------------------------------------
+
+class OpenScadHighlighter(QSyntaxHighlighter):
+    """OpenSCAD 语法高亮器（模块、函数、变换、原语、注释、数值、字符串）。"""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.rules: list[tuple[QRegularExpression, QTextCharFormat]] = []
+
+        # 1. 结构与流程关键字
+        kw_fmt = QTextCharFormat()
+        kw_fmt.setForeground(QColor("#818cf8"))  # 亮紫蓝
+        kw_fmt.setFontWeight(QFont.Weight.Bold)
+        keywords = [
+            "module", "function", "union", "difference", "intersection",
+            "if", "else", "for", "let", "echo", "render", "use", "include",
+        ]
+        for kw in keywords:
+            self.rules.append((QRegularExpression(rf"\b{kw}\b"), kw_fmt))
+
+        # 2. 变换与挤出函数
+        trans_fmt = QTextCharFormat()
+        trans_fmt.setForeground(QColor("#38bdf8"))  # 天蓝
+        trans_fmt.setFontWeight(QFont.Weight.DemiBold)
+        transforms = [
+            "translate", "rotate", "scale", "mirror", "color", "offset", "hull",
+            "minkowski", "linear_extrude", "rotate_extrude", "projection",
+        ]
+        for tf in transforms:
+            self.rules.append((QRegularExpression(rf"\b{tf}\b"), trans_fmt))
+
+        # 3. 几何原语
+        prim_fmt = QTextCharFormat()
+        prim_fmt.setForeground(QColor("#34d399"))  # 薄荷绿
+        prim_fmt.setFontWeight(QFont.Weight.Bold)
+        primitives = [
+            "cube", "cylinder", "sphere", "circle", "square", "polygon", "polyhedron",
+        ]
+        for pr in primitives:
+            self.rules.append((QRegularExpression(rf"\b{pr}\b"), prim_fmt))
+
+        # 4. 常量与内置变量
+        const_fmt = QTextCharFormat()
+        const_fmt.setForeground(QColor("#fbbf24"))  # 琥珀黄
+        for c in (r"\$fn\b", r"\$fa\b", r"\$fs\b", r"\$t\b", r"\btrue\b", r"\bfalse\b", r"\bPI\b"):
+            self.rules.append((QRegularExpression(c), const_fmt))
+
+        # 5. 数值
+        num_fmt = QTextCharFormat()
+        num_fmt.setForeground(QColor("#f472b6"))  # 亮粉色
+        self.rules.append((QRegularExpression(r"\b[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?\b"), num_fmt))
+
+        # 6. 字符串
+        str_fmt = QTextCharFormat()
+        str_fmt.setForeground(QColor("#a3e635"))  # 柠檬绿
+        self.rules.append((QRegularExpression(r'"[^"\\]*(\\.[^"\\]*)*"'), str_fmt))
+
+        # 7. 单行注释
+        comment_fmt = QTextCharFormat()
+        comment_fmt.setForeground(QColor("#64748b"))  # 蓝灰注释
+        comment_fmt.setFontItalic(True)
+        self.rules.append((QRegularExpression(r"//[^\n]*"), comment_fmt))
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802
+        for pattern, fmt in self.rules:
+            match_iter = pattern.globalMatch(text)
+            while match_iter.hasNext():
+                match = match_iter.next()
+                self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +443,12 @@ class MainWindow(QMainWindow):
         self.txt_scad = QPlainTextEdit()
         self.txt_scad.setReadOnly(False)
         self.txt_scad.setPlaceholderText("// 在此处直接编辑 OpenSCAD 源码，点击右上角「重新渲染源码」即刻生效")
-        self.txt_scad.setStyleSheet("font-family: 'Monospace', monospace;")
+        self.txt_scad.setStyleSheet(
+            "QPlainTextEdit { background-color: #0f172a; color: #f8fafc; font-family: 'Monospace', monospace; "
+            "font-size: 13px; line-height: 1.4; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); padding: 4px; }"
+        )
         self.txt_scad.setFixedHeight(220)
+        self._scad_highlighter = OpenScadHighlighter(self.txt_scad.document())
         lay.addWidget(self.txt_scad)
         return w
 
