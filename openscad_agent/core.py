@@ -328,21 +328,26 @@ SPEC_SCHEMA = """\
   "parts": [
     {
       "id": "string, 部件唯一 id（如 'body'）",
-      "primitive": "cube|cylinder|sphere|capsule|polyhedron|hull",
-      // 尺寸字段（二选一，优先 size）:
-      //   cube:          size: [x, y, z]
-      //   cylinder/cone: size: [直径, 高度]  或  [底径d1, 顶径d2, 高度]
-      //                  或 radius: N, height: N 或 r1: N, r2: N, height: N (圆锥/圆台)
-      //   sphere:        size: [半径]       或  radius: N
-      //   capsule:       size: [半径, 柱高]  或  radius: N, height: N (平滑两端倒角胶囊柱)
+      "primitive": "cube|cylinder|sphere|capsule|polyhedron|linear_extrude|rotate_extrude",
+      // 尺寸/参数字段（优先使用 size，拉伸/回转使用 polygon 二维轮廓）:
+      //   cube:           size: [x, y, z]
+      //   cylinder/cone:  size: [直径, 高度]  或  [底径d1, 顶径d2, 高度]
+      //                   或 radius: N, height: N 或 r1: N, r2: N, height: N (圆锥/圆台)
+      //   sphere:         size: [半径]       或  radius: N
+      //   capsule:        size: [半径, 柱高]  或  radius: N, height: N (平滑两端倒角胶囊柱)
+      //   linear_extrude: height: H, polygon: [[x,y],...], twist: deg, scale: S (2D草图直拉伸/扭转)
+      //   rotate_extrude: angle: 360, polygon: [[x,y],...] (2D截面回转体如花瓶/圆环/滑轮)
       "size": [x, y, z],
       "radius": N,          // 圆柱/球/胶囊专用（size 缺省时使用）
-      "height": N,          // 圆柱/胶囊专用（size 缺省时使用）
+      "height": N,          // 圆柱/胶囊/拉伸专用（size 缺省时使用）
       "r1": N,              // 圆锥/圆台底半径 (可选)
       "r2": N,              // 圆锥/圆台顶半径 (可选，为 0 则为尖锥)
+      "polygon": [[x,y],...], // 2D 草图多边形点列 (用于 linear_extrude/rotate_extrude)
       "color": "string|[r,g,b]", // 部件视觉颜色（如 "dimgray", "firebrick", "gold", "#e67e22"），帮助预览图区分各语义部件
       "symmetric": true,    // 可选，沿X轴双侧镜像对称 (如翅膀、把手、双足对称结构)
       "mirror": [0, 0, 0],  // 可选，[mx, my, mz] 单侧镜像轴
+      "radial_array": { "count": 6, "radius": 25 }, // 可选，沿圆周均布 (如法兰螺栓孔、齿轮齿、环形柱)
+      "linear_array": { "count": 4, "step": [15, 0, 0] }, // 可选，沿直线等距排布 (如散热片、排针)
       "center": [x, y, z], // 部件原点坐标（mm）
       "rotation": [rx, ry, rz], // 绕三轴角度（度，可选）
       "holes": [           // 需减去的实体（孔、凹槽），字段同上

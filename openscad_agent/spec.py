@@ -21,9 +21,16 @@ from .log import get_logger as _log_module
 _log = _log_module()
 
 #: 合法原语名（含 LLM 常见别名）
-PRIMITIVES = {"cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull"}
+PRIMITIVES = {
+    "cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull",
+    "linear_extrude", "rotate_extrude",
+}
 #: 原语别名 → 标准名
-_ALIAS = {"cuboid": "cube", "box": "cube"}
+_ALIAS = {
+    "cuboid": "cube", "box": "cube",
+    "extrude": "linear_extrude",
+    "lathe": "rotate_extrude", "revolve": "rotate_extrude",
+}
 
 
 def _as_vec3(v: Any, default=(0.0, 0.0, 0.0)) -> list[float]:
@@ -134,8 +141,24 @@ def normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
     return normalize_size(prim, hole)
 
 
+def _sanitize_array(cfg: Any, array_type: str) -> Optional[dict[str, Any]]:
+    """规范化阵列配置（radial: count+radius, linear: count+step）。"""
+    if not isinstance(cfg, dict):
+        return None
+    count = int(_sanitize_num(cfg.get("count", 0), 0))
+    if count <= 1:
+        return None
+    if array_type == "radial":
+        radius = _sanitize_num(cfg.get("radius", cfg.get("r", 20.0)), 20.0)
+        return {"count": count, "radius": radius}
+    elif array_type == "linear":
+        step = _as_vec3(cfg.get("step"), (10.0, 0.0, 0.0))
+        return {"count": count, "step": step}
+    return None
+
+
 def _normalize_hole(hole: dict[str, Any]) -> dict[str, Any]:
-    """规范化单个 hole（补 primitive/center/size，净化数值）。"""
+    """规范化单个 hole（补 primitive/center/size，净化数值与阵列）。"""
     if not isinstance(hole, dict):
         return {"primitive": "cube"}
     prim = _ALIAS.get(str(hole.get("primitive", "cube")).lower(),
@@ -146,6 +169,14 @@ def _normalize_hole(hole: dict[str, Any]) -> dict[str, Any]:
     out["primitive"] = prim
     out["center"] = _as_vec3(hole.get("center"), (0.0, 0.0, 0.0))
     out["size"] = normalize_hole_size(prim, hole)
+    if "radial_array" in hole:
+        arr = _sanitize_array(hole["radial_array"], "radial")
+        if arr:
+            out["radial_array"] = arr
+    if "linear_array" in hole:
+        arr = _sanitize_array(hole["linear_array"], "linear")
+        if arr:
+            out["linear_array"] = arr
     return out
 
 
@@ -170,6 +201,30 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
         out["symmetric"] = True
     if "mirror" in part and part.get("mirror"):
         out["mirror"] = _as_vec3(part.get("mirror"), (1.0, 0.0, 0.0))
+    if "radial_array" in part:
+        arr = _sanitize_array(part["radial_array"], "radial")
+        if arr:
+            out["radial_array"] = arr
+    if "linear_array" in part:
+        arr = _sanitize_array(part["linear_array"], "linear")
+        if arr:
+            out["linear_array"] = arr
+
+    # 拉伸与回转体的 2D polygon 点列规范化
+    if prim in ("linear_extrude", "rotate_extrude"):
+        poly = part.get("polygon") or part.get("points")
+        if isinstance(poly, list) and poly:
+            clean_poly = []
+            for pt in poly:
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    clean_poly.append([_sanitize_num(pt[0], 0.0), _sanitize_num(pt[1], 0.0)])
+            out["polygon"] = clean_poly if len(clean_poly) >= 3 else None
+        else:
+            out["polygon"] = None
+        out["twist"] = _sanitize_num(part.get("twist", 0.0), 0.0)
+        out["scale"] = _sanitize_num(part.get("scale", 1.0), 1.0)
+        out["angle"] = _sanitize_num(part.get("angle", 360.0), 360.0)
+
     out["size"] = normalize_size(prim, part)
     holes = part.get("holes") or []
     out["holes"] = [_normalize_hole(h) for h in holes]

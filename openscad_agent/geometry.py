@@ -175,18 +175,92 @@ def _normalize_hole_size(prim: str, hole: dict[str, Any]) -> list[float]:
     return _spec_norm_hole(prim, hole)
 
 
-def _hole_code(hole: dict[str, Any]) -> list[str]:
-    """生成单个挖除实体的代码行（缩进对齐 difference() 内部）。
+def _linear_extrude_code(part: dict[str, Any], center: list[float], note: str) -> list[str]:
+    """2D 多边形草图直拉伸生成器（支持扭转 twist 与锥度 scale）。"""
+    h = float(part.get("height", 10.0))
+    twist = float(part.get("twist", 0.0))
+    scale = float(part.get("scale", 1.0))
+    poly = part.get("polygon")
+    cx, cy, cz = (float(center[i]) for i in range(3))
 
-    同样支持 radius/height、cuboid、size 标量等规范化。
-    """
+    params = [f"height = {_fmt(h)}"]
+    if abs(twist) > 1e-4:
+        params.append(f"twist = {_fmt(twist)}")
+    if abs(scale - 1.0) > 1e-4:
+        params.append(f"scale = {_fmt(scale)}")
+
+    lines = [f"  // {note}" if note else "  // linear_extrude"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+    lines.append(f"    linear_extrude({', '.join(params)}) {{")
+    if poly and len(poly) >= 3:
+        pts = ", ".join(f"[{_fmt(p[0])}, {_fmt(p[1])}]" for p in poly)
+        lines.append(f"      polygon(points = [{pts}]);")
+    else:
+        lines.append("      square([10, 10], center = true);")
+    lines.append("    }")
+    return lines
+
+
+def _rotate_extrude_code(part: dict[str, Any], center: list[float], note: str) -> list[str]:
+    """2D 截面回转体生成器（生成花瓶、圆环、带轮等回转几何）。"""
+    angle = float(part.get("angle", 360.0))
+    poly = part.get("polygon")
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    lines = [f"  // {note}" if note else "  // rotate_extrude"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+    if abs(angle - 360.0) < 1e-4:
+        lines.append("    rotate_extrude() {")
+    else:
+        lines.append(f"    rotate_extrude(angle = {_fmt(angle)}) {{")
+    if poly and len(poly) >= 3:
+        pts = ", ".join(f"[{_fmt(max(p[0], 0.0))}, {_fmt(p[1])}]" for p in poly)
+        lines.append(f"      polygon(points = [{pts}]);")
+    else:
+        lines.append("      translate([10, 0]) circle(r = 5);")
+    lines.append("    }")
+    return lines
+
+
+def _apply_array_wrapper(lines: list[str], item: dict[str, Any], indent: str = "") -> list[str]:
+    """对几何行列表应用环形均布 (radial_array) 或线性等距阵列 (linear_array)。"""
+    radial = item.get("radial_array")
+    linear = item.get("linear_array")
+    if radial:
+        count = max(int(radial.get("count", 4)), 1)
+        radius = float(radial.get("radius", 20.0))
+        angle_step = 360.0 / count
+        out = [f"{indent}  // 环形均布阵列 (PCD 数量: {count}, 半径: {_fmt(radius)}mm)"]
+        out.append(f"{indent}  for (i = [0 : {count - 1}]) {{")
+        out.append(f"{indent}    rotate([0, 0, i * {_fmt(angle_step)}])")
+        out.append(f"{indent}      translate([{_fmt(radius)}, 0, 0])")
+        for l in lines:
+            out.append(f"  {l}" if l.strip() else l)
+        out.append(f"{indent}  }}")
+        return out
+    elif linear:
+        count = max(int(linear.get("count", 3)), 1)
+        step = linear.get("step", [10, 0, 0])
+        sx, sy, sz = float(step[0]), float(step[1]), float(step[2])
+        out = [f"{indent}  // 线性等距阵列 (数量: {count}, 步长: [{_fmt(sx)}, {_fmt(sy)}, {_fmt(sz)}])"]
+        out.append(f"{indent}  for (i = [0 : {count - 1}]) {{")
+        out.append(f"{indent}    translate([i * {_fmt(sx)}, i * {_fmt(sy)}, i * {_fmt(sz)}])")
+        for l in lines:
+            out.append(f"  {l}" if l.strip() else l)
+        out.append(f"{indent}  }}")
+        return out
+    return lines
+
+
+def _hole_code(hole: dict[str, Any]) -> list[str]:
+    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阵列）。"""
     prim = hole.get("primitive", "cube")
     size = _normalize_hole_size(prim, hole)
     center = hole.get("center", [0, 0, 0])
     body = _part_body(prim, size, center, "hole")
     lines = [f"    // hole: {prim} {size} @ {center}"]
     lines += [f"      {l}" if l else l for l in body]
-    return lines
+    return _apply_array_wrapper(lines, hole, indent="    ")
 
 
 def _color_wrapper(color: Any) -> tuple[str, str]:
@@ -243,6 +317,27 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
         lines.append("}")
         return lines
 
+    # linear_extrude 直拉伸与 rotate_extrude 回转体
+    if prim in ("linear_extrude", "rotate_extrude"):
+        if prim == "linear_extrude":
+            ext_body = _linear_extrude_code(part, center, note)
+        else:
+            ext_body = _rotate_extrude_code(part, center, note)
+        ext_body = _apply_array_wrapper(ext_body, part, indent=indent)
+        rx, ry, rz = (float(rotation[i]) for i in range(3))
+        if any(abs(v) > 1e-6 for v in (rx, ry, rz)):
+            lines.append(f"{indent}  translate([{_fmt(float(center[0]))}, {_fmt(float(center[1]))}, {_fmt(float(center[2]))}])")
+            lines.append(f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])")
+            for l in ext_body:
+                lines.append(f"{indent}      {l}" if l.strip() else l)
+        else:
+            for l in ext_body:
+                lines.append(f"{indent}{l}" if l.strip() else l)
+        if c_close:
+            lines.append(c_close)
+        lines.append("}")
+        return lines
+
     # 部件体（主体 + 孔洞）
     body: list[str] = []
     if holes:
@@ -267,6 +362,9 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
             inner += [f"{indent}{l}" if l else l for l in _hole_code_rel(hole, center)]
     else:
         inner = body
+
+    # 阵列复制 (Array: radial / linear)
+    inner = _apply_array_wrapper(inner, part, indent=indent)
 
     # 镜像与对称 (Symmetry & Mirror)
     if part.get("symmetric"):
@@ -354,6 +452,8 @@ def _estimate_part_min_z(part: dict[str, Any]) -> float:
     elif prim == "sphere" or prim == "capsule":
         r = float(size[0]) if size else 5.0
         return cz - (0 if prim == "capsule" else r)
+    elif prim in ("linear_extrude", "rotate_extrude"):
+        return cz
     elif prim == "polyhedron":
         pts = part.get("points") or part.get("vertices")
         if isinstance(pts, list) and pts:
