@@ -430,16 +430,21 @@ class AgnesVision:
         try:
             if conversation_history is not None:
                 conversation_history.append({"role": "user", "content": content})
-                # 为防止上下文过长，保留首轮原图 + 最近 2 轮上下文
+                # 修剪策略 (OpenAI 多模态消息 user/assistant 严格交替约束):
+                # 保留首轮 user+assistant (索引 0,1), 其余保留最新的 N 条且为偶数,
+                # 从索引 2 的 user 边界对齐, 确保拼接后不会出现连续 user 或连续 assistant。
                 if len(conversation_history) > 6:
-                    conversation_history[:] = [conversation_history[0], conversation_history[1]] + conversation_history[-4:]
+                    recent = len(conversation_history) - 2
+                    recent = recent - (recent % 2)  # 对齐到偶数边界
+                    recent = min(recent, 4)          # 最多保留 4 条
+                    conversation_history[:] = conversation_history[:2] + conversation_history[2 + (4 - recent):]
                 messages = [{"role": "system", "content": self.REVIEW_PROMPT}] + list(conversation_history)
             else:
                 messages = [
                     {"role": "system", "content": self.REVIEW_PROMPT},
                     {"role": "user", "content": content},
                 ]
-            raw = self._chat_raw(messages)
+            raw = self._post_chat(messages)
             if conversation_history is not None:
                 conversation_history.append({"role": "assistant", "content": raw})
             return self._extract_review(raw)
