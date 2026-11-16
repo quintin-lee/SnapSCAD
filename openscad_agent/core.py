@@ -38,11 +38,16 @@ def find_executable(name: str) -> str:
     found = shutil.which(name)
     if found:
         return found
-    candidates = [
+
+    posix_candidates = [
         f"/usr/bin/{name}",
         f"/usr/local/bin/{name}",
-        f"C:\\Program Files\\OpenSCAD\\bin\\{name}.exe",
     ]
+    win_candidates = [
+        f"{os.environ.get('ProgramFiles', r'C:\Program Files')}\\OpenSCAD\\bin\\{name}.exe",
+        f"{os.environ.get('ProgramFiles', r'C:\Program Files')}\\openscad.exe",
+    ]
+    candidates = posix_candidates + win_candidates
     for c in candidates:
         if os.path.exists(c):
             return c
