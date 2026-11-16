@@ -17,6 +17,7 @@ from pathlib import Path
 
 from openscad_agent import AgentConfig, OpenscadAgent, SPEC_SCHEMA
 from openscad_agent.gallery import generate_gallery
+from openscad_agent.log import setup_logging
 from openscad_agent.packager import package_project
 
 
@@ -55,7 +56,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--serve", nargs="?", const="8080", help="启动局域网 3D 资产共享 Web 服务 (可指定端口如 --serve 8080)")
     p.add_argument("--wizard", action="store_true", help="启动交互式终端步进建模向导")
     return p
-from openscad_agent.log import setup_logging
 
 
 def main(argv: list[str] | None = None) -> int:
