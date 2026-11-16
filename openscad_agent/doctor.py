@@ -102,11 +102,11 @@ def check_assembly_interference(parts: list[dict[str, Any]]) -> list[tuple[str, 
             dy = min(max_a[1], max_b[1]) - max(min_a[1], min_b[1])
             dz = min(max_a[2], max_b[2]) - max(min_a[2], min_b[2])
 
-            if dx > 0.5 and dy > 0.5 and dz > 0.5:
+            if dx > 0.05 and dy > 0.05 and dz > 0.05:
                 v_overlap = round(dx * dy * dz, 1)
                 if v_overlap > 30.0:
                     results.append((id_a, id_b, "collision", v_overlap))
-            elif dx > 0.5 and dy > 0.5 and abs(dz) < 0.2:
+            elif dx > 0.05 and dy > 0.05 and abs(dz) < 0.2:
                 contact_area = round(dx * dy, 1)
                 results.append((id_a, id_b, "contact", contact_area))
     return results
