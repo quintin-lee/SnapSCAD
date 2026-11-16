@@ -247,6 +247,9 @@ def _text_code(part: dict[str, Any], center: list[float], note: str) -> list[str
 
     lines = [f"  // {note}" if note else f"  // 3D text: \"{raw_text}\""]
     lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+    # OpenSCAD 2021.01: text() 的 height 参数在老版本中未注册为有效形参 (会报
+    # "variable height not specified as parameter" 并降级为 2D 对象)，
+    # 因此 3D 浮雕必须用 linear_extrude(height) 包裹 2D text() 路径轮廓。
     lines.append(f"    linear_extrude(height = {_fmt(h)}) {{")
     lines.append(f'      text("{raw_text}", size = {_fmt(font_size)}, halign = "center", valign = "center"{font_str});')
     lines.append("    }")
@@ -506,7 +509,11 @@ def _estimate_part_min_z(part: dict[str, Any]) -> float:
     elif prim == "sphere" or prim == "capsule":
         r = float(size[0]) if size else 5.0
         return cz - (0 if prim == "capsule" else r)
+    elif prim == "sphere" or prim == "capsule":
+        r = float(size[0]) if size else 5.0
+        return cz - (0 if prim == "capsule" else r)
     elif prim in ("linear_extrude", "rotate_extrude", "text"):
+        # linear_extrude / rotate_extrude / text 均向上拉伸，最低点为中心 Z
         return cz
     elif prim == "polyhedron":
         pts = part.get("points") or part.get("vertices")
