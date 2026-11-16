@@ -4,6 +4,7 @@
 - 自动解析本机局域网 IP (如 192.168.x.x)
 - 支持手机/平板/团队多端设备在同一 Wi-Fi 下无线 3D 检视与模型下载
 - 支持 CLI 阻塞运行 (snapscad --serve) 与 GUI 后台线程非阻塞运行
+- 重复调用 serve_assets 时自动关闭旧 HTTPServer 并 join 旧线程, 防止端口泄漏与僵尸线程堆积
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ _log = _log_module()
 
 _server_thread: Optional[threading.Thread] = None
 _active_httpd: Optional[HTTPServer] = None
+_lock = threading.Lock()  # 保护全局 httpd/thread 的并发赋值
 
 
 def get_local_lan_ip() -> str:
@@ -45,6 +47,22 @@ def find_free_port(start_port: int = 8080, max_tries: int = 50) -> int:
     return start_port
 
 
+def stop_server() -> None:
+    """停止并清理当前后台 HTTPServer 与守护线程 (线程安全)。"""
+    global _server_thread, _active_httpd
+    with _lock:
+        if _active_httpd is not None:
+            try:
+                _active_httpd.shutdown()
+                _active_httpd.server_close()
+            except Exception:
+                pass
+            _active_httpd = None
+        if _server_thread is not None and _server_thread.is_alive():
+            _server_thread.join(timeout=3)
+        _server_thread = None
+
+
 def serve_assets(
     directory: str | Path,
     port: int = 8080,
@@ -53,9 +71,15 @@ def serve_assets(
 ) -> tuple[str, str, int]:
     """启动 3D 资产共享 Web 服务，托管指定的输出目录。
 
+    若已存在后台服务, 先自动关闭旧服务并释放端口, 防止线程堆积。
     返回 (local_url, lan_url, actual_port)。
     """
     global _server_thread, _active_httpd
+
+    # 防止重复调用导致端口泄漏与僵尸线程: 先清理旧服务
+    if not blocking:
+        stop_server()
+
     out_dir = Path(directory).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,7 +96,8 @@ def serve_assets(
             pass
 
     httpd = QuietServer(("0.0.0.0", free_port), handler)
-    _active_httpd = httpd
+    with _lock:
+        _active_httpd = httpd
 
     lan_ip = get_local_lan_ip()
     local_url = f"http://localhost:{free_port}/gallery.html"
@@ -98,14 +123,16 @@ def serve_assets(
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\n🛑 资产服务已停止。")
-            httpd.server_close()
+            stop_server()
     else:
-        def _worker():
+        def _worker() -> None:
             httpd.serve_forever()
-        _server_thread = threading.Thread(target=_worker, daemon=True)
-        _server_thread.start()
+        t = threading.Thread(target=_worker, daemon=True)
+        with _lock:
+            _server_thread = t
+        t.start()
 
     return local_url, lan_url, free_port
 
 
-__all__ = ["serve_assets", "get_local_lan_ip"]
+__all__ = ["serve_assets", "stop_server", "get_local_lan_ip", "find_free_port"]
