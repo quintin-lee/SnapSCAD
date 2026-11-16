@@ -627,6 +627,11 @@ def generate_html_viewer(
     if spec and scad_path and Path(scad_path).exists():
         parts = spec.get("parts") or []
         if 1 < len(parts) <= 12:
+            # 定位 OpenSCAD 可执行文件 (复用 find_executable, 避免硬编码 "openscad")
+            try:
+                openscad_bin = find_executable("openscad")
+            except FileNotFoundError:
+                openscad_bin = "openscad"  # 延迟到实际调用时再报错
             tmp_p_dir = html_path.parent / f"_b64tmp_{stl_path.stem}"
             tmp_p_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -642,7 +647,7 @@ def generate_html_viewer(
                     wrap_scad = tmp_p_dir / f"w_{pid}.scad"
                     wrap_stl = tmp_p_dir / f"{pid}.stl"
                     wrap_scad.write_text(f"use <{Path(scad_path).resolve()}>\n{pid}();\n", encoding="utf-8")
-                    code, _, _ = run_cmd(["openscad", "-o", str(wrap_stl), "--export-format=binstl", str(wrap_scad)])
+                    code, _, _ = run_cmd([openscad_bin, "-o", str(wrap_stl), "--export-format=binstl", str(wrap_scad)])
                     if code == 0 and wrap_stl.exists():
                         p_b64 = base64.b64encode(wrap_stl.read_bytes()).decode("ascii")
                         parts_json_list.append({"id": pid, "color": color_str, "b64": p_b64})
