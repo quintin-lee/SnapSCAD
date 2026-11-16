@@ -47,6 +47,22 @@ def find_free_port(start_port: int = 8080, max_tries: int = 50) -> int:
     return start_port
 
 
+def is_port_in_use(port: int, host: str = "0.0.0.0") -> bool:
+    """检测指定端口是否已被占用 (bind 尝试, 不发送实际请求)。
+
+    使用 SO_EXCLUSIVEADDRUSE (Windows) / 不加 SO_REUSEADDR (POSIX) 保证 bind 成功即
+    表示端口真正空闲; 被其他进程监听时 bind 会报 EADDRINUSE。返回 True 表示被占用。
+    用于 CLI --serve 与 GUI 局域网分享前的端口冲突预检。
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((host, port))
+            s.close()
+            return False
+    except OSError:
+        return True
+
+
 def stop_server() -> None:
     """停止并清理当前后台 HTTPServer 与守护线程 (线程安全)。"""
     global _server_thread, _active_httpd
@@ -88,7 +104,14 @@ def serve_assets(
     if not gallery_p.exists():
         generate_gallery(out_dir)
 
-    free_port = find_free_port(port)
+    # 端口冲突预检: 若指定端口已被占用, 提示并自动寻找空闲端口
+    if is_port_in_use(port):
+        free_port = find_free_port(port + 1)
+        if free_port != port:
+            print(f"⚠️  端口 {port} 已被占用, 自动切换到 {free_port}")
+            _log.warning("[server] 端口 %d 被占用, 自动切换到 %d", port, free_port)
+    else:
+        free_port = port
     handler = functools.partial(SimpleHTTPRequestHandler, directory=str(out_dir))
 
     class QuietServer(HTTPServer):
@@ -135,4 +158,4 @@ def serve_assets(
     return local_url, lan_url, free_port
 
 
-__all__ = ["serve_assets", "stop_server", "get_local_lan_ip", "find_free_port"]
+__all__ = ["serve_assets", "stop_server", "get_local_lan_ip", "find_free_port", "is_port_in_use"]

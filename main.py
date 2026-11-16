@@ -70,8 +70,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if run_all_tests() else 1
 
     if args.serve:
-        from openscad_agent.server import serve_assets
+        from openscad_agent.server import serve_assets, is_port_in_use
         port = int(args.serve) if str(args.serve).isdigit() else 8080
+        # 端口占用预检: 若指定端口已被占用, 提示用户
+        if is_port_in_use(port):
+            print(f"⚠️  端口 {port} 已被占用, 将自动寻找空闲端口")
         serve_assets(args.output, port=port, blocking=True)
         return 0
 

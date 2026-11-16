@@ -1231,11 +1231,23 @@ class MainWindow(QMainWindow):
             self.log(f"⚠️ {msg}")
 
     def on_serve_assets(self) -> None:
-        """启动后台 Web 资产服务器并打印局域网访问地址。"""
+        """启动后台 Web 资产服务器并打印局域网访问地址。
+
+        端口持久化: 首次使用默认 8080, 后续调用复用上次使用的端口
+        (QSettings key "serve_port")。若端口被占用, 自动寻找空闲端口并提示。
+        """
         out_dir = Path(self.txt_outdir.text().strip() or "out").resolve()
-        from openscad_agent.server import serve_assets
+        from openscad_agent.server import serve_assets, is_port_in_use
+        # 端口持久化: 从 QSettings 读取上次使用的端口, 默认 8080
+        saved_port = int(self._settings.value("serve_port", "8080"))
         try:
-            local_url, lan_url, port = serve_assets(out_dir, port=8080, open_browser=True, blocking=False)
+            if is_port_in_use(saved_port):
+                self.log(f"⚠️  端口 {saved_port} 已被占用, 自动寻找空闲端口…")
+            local_url, lan_url, port = serve_assets(out_dir, port=saved_port, open_browser=True, blocking=False)
+            # 持久化本次实际使用的端口
+            if port != saved_port:
+                self.log(f"⚠️  端口 {saved_port} 不可用, 已自动切换到 {port}")
+            self._settings.setValue("serve_port", str(port))
             self.log(f"📡 局域网 3D 资产服务已在后台就绪:\n   💻 本机: {local_url}\n   📱 手机无线: {lan_url}")
             QMessageBox.information(
                 self, "局域网 3D 资产分享已启动",
