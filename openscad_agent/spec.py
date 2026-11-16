@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Optional
 
 from .log import get_logger as _log_module
 
