@@ -355,6 +355,11 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
                 p["linear_array"]["step"] = _scale_geom(p["linear_array"]["step"], factor)
             if p.get("radial_array"):
                 p["radial_array"]["radius"] = _scale_geom(p["radial_array"]["radius"], factor)
+            # 3D 浮雕文字: 字号与浮雕厚度同样必须随单位缩放, 否则字体与实体比例失真
+            if str(p.get("primitive", "")).lower() == "text" or p.get("text") or p.get("font_size"):
+                if "font_size" in p:
+                    p["font_size"] = _scale_geom(p["font_size"], factor)
+                # p["height"] 已由上方通用逻辑缩放 (覆盖 text/linear_extrude/capsule 的拉伸高度)
             for h in p.get("holes", []):
                 h["size"] = _scale_geom(h.get("size"), factor)
                 h["center"] = _scale_geom(h.get("center"), factor)
