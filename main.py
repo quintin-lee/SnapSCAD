@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-review", action="store_true", help="跳过渲染图审查闭环 (默认开启)")
     p.add_argument("--no-multi-view", action="store_true", help="审查时不做多视角渲染 (默认开启)")
     p.add_argument("--no-3mf", action="store_true", help="跳过同步导出 3MF 格式 (默认同时导出 STL+3MF)")
+    p.add_argument("--export-2d", action="store_true", help="同步导出 2D 激光切割投影 (DXF+SVG)")
     p.add_argument("--zip", action="store_true", help="建模完成后一键打包全套工程资产为 ZIP 压缩包 (*_project.zip)")
     p.add_argument("--no-render", action="store_true", help="跳过 3D/预览渲染, 仅生成 .scad")
     p.add_argument("--preview-only", action="store_true", help="仅渲染 2D 预览, 跳过 3D 导出")
@@ -103,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         image_max_side=args.max_image_side,
         extra_system=args.extra_system,
         export_3mf=not args.no_3mf,
+        export_2d=args.export_2d,
     )
 
     agent = OpenscadAgent(config)
@@ -286,7 +288,7 @@ def run_cli_wizard() -> int:
     if pack_zip:
         argv.append("--zip")
     if export_2d:
-        argv += ["--export-dxf", "--export-svg"]
+        argv += ["--export-2d"]
     if hint:
         argv += ["--hint", hint]
 
