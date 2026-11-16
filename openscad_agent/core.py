@@ -204,44 +204,59 @@ class OpenscadRenderer:
             raise RuntimeError(f"OpenSCAD 导出失败 ({scad_path.name} -> {out_path.name}):\n{err or out}")
         _log.info("[render] 已导出 3D 模型: %s", out_path)
         if fmt == "stl":
-            # 同步导出 3MF 现代切片格式
-            # 优先级: renderer._agent_export_3mf (GUI 显式开关) > config.export_3mf > 默认 True
-            export_3mf = self._agent_export_3mf
-            if export_3mf is None:
-                export_3mf = getattr(self.config, "export_3mf", True)
-            if export_3mf:
-                try:
-                    target_3mf = out_path.with_suffix(".3mf")
-                    cmd_3mf = self._base_cmd() + [
-                        "-o", str(target_3mf),
-                        "--export-format=3mf",
-                        str(scad_path),
-                    ]
-                    run_cmd(cmd_3mf)
-                    _log.info("[render] 已同步导出 3MF 切片模型: %s", target_3mf.name)
-                except Exception as e:  # noqa: BLE001
-                    _log.warning("[render] 同步导出 3MF 失败: %s", e)
-
-            # 2D 激光投影同步导出 (DXF+SVG)
-            export_2d = self._agent_export_2d
-            if export_2d is None:
-                export_2d = getattr(self.config, "export_2d", False)
-            if export_2d:
-                try:
-                    dxf_out = out_path.with_suffix(".dxf")
-                    svg_out = out_path.with_suffix(".svg")
-                    self.export_2d_projection(scad_path, dxf_out, cut=False)
-                    self.export_2d_projection(scad_path, svg_out, cut=False)
-                    _log.info("[render] 已同步导出 2D 激光投影: %s, %s", dxf_out.name, svg_out.name)
-                except Exception as e:  # noqa: BLE001
-                    _log.warning("[render] 同步导出 2D 投影失败: %s", e)
-
-            try:
-                html_path = out_path.with_name(f"{out_path.stem}_viewer.html")
-                generate_html_viewer(out_path, html_path, model_name=out_path.stem, scad_path=scad_path)
-            except Exception as e:  # noqa: BLE001
-                _log.warning("[render] 生成 3D 网页查看器失败: %s", e)
+            self._sync_export_3mf(out_path)
+            self._sync_export_2d(out_path)
+            self._generate_viewer(out_path, scad_path)
         return out_path
+
+    def _sync_export_3mf(self, out_path: Path) -> None:
+        """STL 导出后同步 3MF 现代切片格式，优先级: 显式 GUI 开关 > config > 默认 True。"""
+        export_3mf = self._agent_export_3mf
+        if export_3mf is None:
+            export_3mf = getattr(self.config, "export_3mf", True)
+        if not export_3mf:
+            return
+        try:
+            target_3mf = out_path.with_suffix(".3mf")
+            if target_3mf.exists():
+                return  # 避免同一 .scad 重复 CGAL 求值
+            cmd_3mf = self._base_cmd() + [
+                "-o", str(target_3mf),
+                "--export-format=3mf",
+                str(out_path.parent / f"{out_path.stem}.scad"),
+            ]
+            code, _, err = run_cmd(cmd_3mf)
+            if code != 0:
+                _log.warning("[render] 同步导出 3MF 失败: %s", err)
+            else:
+                _log.info("[render] 已同步导出 3MF 切片模型: %s", target_3mf.name)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("[render] 同步导出 3MF 失败: %s", e)
+
+    def _sync_export_2d(self, scad_path: Path, out_path: Optional[Path] = None) -> None:
+        """STL 导出后同步 2D 激光投影 (DXF+SVG)，优先级: 显式 GUI 开关 > config > 默认 False。"""
+        export_2d = self._agent_export_2d
+        if export_2d is None:
+            export_2d = getattr(self.config, "export_2d", False)
+        if not export_2d:
+            return
+        target = out_path or scad_path
+        try:
+            dxf_out = target.with_suffix(".dxf")
+            svg_out = target.with_suffix(".svg")
+            self.export_2d_projection(scad_path, dxf_out, cut=False)
+            self.export_2d_projection(scad_path, svg_out, cut=False)
+            _log.info("[render] 已同步导出 2D 激光投影: %s, %s", dxf_out.name, svg_out.name)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("[render] 同步导出 2D 投影失败: %s", e)
+
+    def _generate_viewer(self, out_path: Path, scad_path: Path) -> None:
+        """STL 导出后生成独立 HTML 3D 网页交互查看器。"""
+        try:
+            html_path = out_path.with_name(f"{out_path.stem}_viewer.html")
+            generate_html_viewer(out_path, html_path, model_name=out_path.stem, scad_path=scad_path)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("[render] 生成 3D 网页查看器失败: %s", e)
 
     def render_preview(self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600)) -> Path:
         """渲染 2D 预览图（默认斜视角）。
@@ -275,25 +290,31 @@ class OpenscadRenderer:
 
         view 取值：top/front/side/iso/perspective。
         自动注入 --camera 空间旋转与 --projection 正交/透视矩阵。
+        OpenSCAD 2021.01 等老版本不支持 --camera，若失败则回退到
+        --autocenter + --viewall + --projection 的基础模式，保证跨版本可渲染。
         """
         out_png.parent.mkdir(parents=True, exist_ok=True)
-        base = self._base_cmd() + [
+        rot, proj = self.CAMERA_MATRIX.get(view, ("55,0,25", "p"))
+        base_cmd = self._base_cmd() + [
             "--autocenter", "--viewall",
             f"--imgsize={size[0]},{size[1]}",
             *self._preview_arg(),
             "-o", str(out_png), str(scad_path),
         ]
-        rot, proj = self.CAMERA_MATRIX.get(view, ("55,0,25", "p"))
-        cmd = base + [
+        # 先尝试注入真实相机矩阵
+        camera_cmd = base_cmd + [
             f"--camera=0,0,0,{rot},100",
             f"--projection={proj}",
         ]
-        code, out, err = run_cmd(cmd)
-        if code != 0 and ("camera" in (err or out).lower() or "unrecognised" in (err or out).lower()):
-            # 容错回退
-            code, out, err = run_cmd(base + [f"--projection={proj}"])
+        code, out, err = run_cmd(camera_cmd)
         if code != 0:
-            raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}, view={view}):\n{err or out}")
+            err_low = (err or out).lower()
+            # 老版本 OpenSCAD 报 unrecognized option / unknown parameter / camera 相关错误
+            if any(k in err_low for k in ("camera", "unrecognised", "unknown", "invalid")):
+                _log.info("[render] OpenSCAD 版本不支持 --camera，回退到基础 autocenter 模式")
+                code, out, err = run_cmd(base_cmd + [f"--projection={proj}"])
+            if code != 0:
+                raise RuntimeError(f"OpenSCAD 渲染预览失败 ({scad_path.name}, view={view}):\n{err or out}")
         _log.info("[render] 已生成真实物理视角图(%s): %s", view, out_png)
         return out_png
 
