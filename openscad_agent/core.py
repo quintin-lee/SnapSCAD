@@ -87,6 +87,8 @@ class AgentConfig:
     ground_z: bool = True
     #: 是否同步导出现代切片格式 3MF (适配 Bambu/Orca/Prusa Slicer)
     export_3mf: bool = True
+    #: 是否同步导出 2D 激光切割投影 (DXF+SVG)
+    export_2d: bool = False
     #: 是否并联提取 Canny 物理几何边缘轮廓辅助视觉理解
     enable_edge_map: bool = True
 
@@ -162,6 +164,20 @@ class OpenscadRenderer:
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
         self.openscad = config.openscad_bin
+        # GUI 显式导出开关覆盖层 (agent 层注入, None 时回退 config 值)
+        self._agent: Any = None
+        self._agent_export_3mf: Optional[bool] = None  # 覆盖 config.export_3mf
+        self._agent_export_2d: Optional[bool] = None   # 覆盖 2D 投影开关
+
+    def set_agent_overrides(self, export_3mf: Optional[bool] = None,
+                            export_2d: Optional[bool] = None) -> None:
+        """由 OpenscadAgent 注入 GUI 层显式导出开关, 优先于 config 默认值。
+
+        export_3mf: None=不覆盖 (使用 config.export_3mf), True/False=强制开启/关闭
+        export_2d:  None=不覆盖, True=启用 DXF+SVG 激光投影同步导出
+        """
+        self._agent_export_3mf = export_3mf
+        self._agent_export_2d = export_2d
 
     def _base_cmd(self) -> list[str]:
         return [self.openscad]
@@ -189,7 +205,11 @@ class OpenscadRenderer:
         _log.info("[render] 已导出 3D 模型: %s", out_path)
         if fmt == "stl":
             # 同步导出 3MF 现代切片格式
-            if getattr(self.config, "export_3mf", True):
+            # 优先级: renderer._agent_export_3mf (GUI 显式开关) > config.export_3mf > 默认 True
+            export_3mf = self._agent_export_3mf
+            if export_3mf is None:
+                export_3mf = getattr(self.config, "export_3mf", True)
+            if export_3mf:
                 try:
                     target_3mf = out_path.with_suffix(".3mf")
                     cmd_3mf = self._base_cmd() + [
@@ -201,6 +221,20 @@ class OpenscadRenderer:
                     _log.info("[render] 已同步导出 3MF 切片模型: %s", target_3mf.name)
                 except Exception as e:  # noqa: BLE001
                     _log.warning("[render] 同步导出 3MF 失败: %s", e)
+
+            # 2D 激光投影同步导出 (DXF+SVG)
+            export_2d = self._agent_export_2d
+            if export_2d is None:
+                export_2d = getattr(self.config, "export_2d", False)
+            if export_2d:
+                try:
+                    dxf_out = out_path.with_suffix(".dxf")
+                    svg_out = out_path.with_suffix(".svg")
+                    self.export_2d_projection(scad_path, dxf_out, cut=False)
+                    self.export_2d_projection(scad_path, svg_out, cut=False)
+                    _log.info("[render] 已同步导出 2D 激光投影: %s, %s", dxf_out.name, svg_out.name)
+                except Exception as e:  # noqa: BLE001
+                    _log.warning("[render] 同步导出 2D 投影失败: %s", e)
 
             try:
                 html_path = out_path.with_name(f"{out_path.stem}_viewer.html")

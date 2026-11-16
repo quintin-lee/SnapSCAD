@@ -90,7 +90,19 @@ class OpenscadAgent:
         self.max_review_rounds = 3   # 渲染图审查自动修正上限
         self.review_views = OpenscadRenderer.VIEWS  # 审查时渲染的视角
         self.enable_multi_view = True              # 是否开启多视角审查
+        self.export_3mf: Optional[bool] = None     # GUI 显式 3MF 导出开关 (None=使用 config 默认)
+        self.export_2d: Optional[bool] = None      # GUI 显式 2D 投影开关 (None=使用 config 默认)
         self.last_review: Optional[dict[str, Any]] = None
+        # 将 GUI 显式开关注入渲染器 (None 时渲染器自动回退 config 值)
+        self.renderer.set_agent_overrides(export_3mf=self.export_3mf, export_2d=self.export_2d)
+
+    def _sync_renderer_overrides(self) -> None:
+        """将当前 agent 层 export_3mf/export_2d 开关同步到渲染器覆盖层。
+
+        GUI 在 on_build 中一次性写入 agent.export_3mf/export_2d 后,
+        调用此方法使渲染器感知最新开关状态, 避免竞态。
+        """
+        self.renderer.set_agent_overrides(export_3mf=self.export_3mf, export_2d=self.export_2d)
 
     # ------------------------------------------------------------------
     def build_from_image(
@@ -224,6 +236,9 @@ class OpenscadAgent:
             model_file = str(out_dir / f"{safe}.{self.config.export_format}")
             preview_png = str(out_dir / f"{safe}_preview.png")
             try:
+                # 同步 GUI 层显式导出开关到渲染器覆盖层, 使 export_model 内部
+                # 的 3MF/2D 同步导出路径感知 GUI 开关状态
+                self._sync_renderer_overrides()
                 self.renderer.export_model(scad_path, Path(model_file))
                 self.renderer.render_preview(scad_path, Path(preview_png))
             except RuntimeError as e:
@@ -335,15 +350,16 @@ class OpenscadAgent:
             # 3MF 切片同步重渲染 (若 GUI 开关开启)
             if getattr(self, "export_3mf", False):
                 try:
-                    self.renderer.export_3mf(scad, out_dir / f"{safe2}.3mf")
+                    self._sync_renderer_overrides()
+                    self.renderer.export_model(scad, out_dir / f"{safe2}.{self.config.export_format}")
                     _log.info("[review] 已同步重导出 3MF 切片文件: %s", safe2)
                 except Exception as e:
                     _log.warning("[review] 3MF 同步重导出失败: %s", e)
             # 2D 激光投影同步重渲染 (若 GUI 开关开启)
             if getattr(self, "export_2d", False):
                 try:
-                    self.renderer.export_2d(scad, out_dir / f"{safe2}.dxf", "dxf")
-                    self.renderer.export_2d(scad, out_dir / f"{safe2}.svg", "svg")
+                    self.renderer.export_2d_projection(scad, out_dir / f"{safe2}.dxf", cut=False)
+                    self.renderer.export_2d_projection(scad, out_dir / f"{safe2}.svg", cut=False)
                     _log.info("[review] 已同步重导出 2D 激光投影: %s", safe2)
                 except Exception as e:
                     _log.warning("[review] 2D 投影同步重导出失败: %s", e)
@@ -463,19 +479,21 @@ class OpenscadAgent:
                 return False
             model_file = out_dir / f"{safe2}.{self.config.export_format}"
             preview_png = out_dir / f"{safe2}_preview.png"
+            self._sync_renderer_overrides()  # 确保渲染器感知最新 GUI 开关状态
             self.renderer.export_model(new_scad, model_file)
             self.renderer.render_preview(new_scad, preview_png)
             # 3MF 切片同步重渲染 (若 GUI 开关开启)
             if getattr(self, "export_3mf", False):
                 try:
-                    self.renderer.export_3mf(new_scad, out_dir / f"{safe2}.3mf")
+                    self._sync_renderer_overrides()
+                    self.renderer.export_model(new_scad, out_dir / f"{safe2}.{self.config.export_format}")
                 except Exception as e:
                     _log.warning("[review] 回退后 3MF 重导出失败: %s", e)
             # 2D 激光投影同步重渲染 (若 GUI 开关开启)
             if getattr(self, "export_2d", False):
                 try:
-                    self.renderer.export_2d(new_scad, out_dir / f"{safe2}.dxf", "dxf")
-                    self.renderer.export_2d(new_scad, out_dir / f"{safe2}.svg", "svg")
+                    self.renderer.export_2d_projection(new_scad, out_dir / f"{safe2}.dxf", cut=False)
+                    self.renderer.export_2d_projection(new_scad, out_dir / f"{safe2}.svg", cut=False)
                 except Exception as e:
                     _log.warning("[review] 回退后 2D 投影重导出失败: %s", e)
             _log.info("[review] 已将最优 spec 重新落盘并渲染: %s", safe2)
