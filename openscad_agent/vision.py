@@ -272,7 +272,11 @@ class AgnesVision:
             ])
         except RuntimeError as e:
             msg = str(e).lower()
-            if "http 400" in msg or "http 422" in msg or "http 401" in msg:
+            # 401/403 为鉴权问题，降级纯文本仍会再次鉴权，直接抛出让调用方提示用户配置 API Key
+            if "http 401" in msg or "http 403" in msg or "api key" in msg or "unauthorized" in msg:
+                _log.error("[agnes] 多模态请求鉴权失败，请检查 API Key 或服务商配置: %s", e)
+                raise
+            if "http 400" in msg or "http 422" in msg:
                 names = ", ".join(p.name for p in paths)
                 _log.warning("[agnes] 多模态图片消息被拒绝(%s)，降级为纯文本请求", e)
                 fallback = (

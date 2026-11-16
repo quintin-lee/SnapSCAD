@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime
+import html as html_lib
 import json
 from pathlib import Path
 from typing import Any
@@ -84,24 +85,26 @@ def generate_gallery(output_dir: str | Path, html_filename: str = "gallery.html"
     cards_html = []
     for m in models:
         badge_cls = "badge-pass" if m["doc_score"] >= 90 else ("badge-warn" if m["doc_score"] >= 70 else "badge-risk")
-        img_tag = (f'<img src="{m["preview_url"]}" alt="{m["name"]}" class="card-thumb">'
+        name_attr = html_lib.escape(str(m["name"]), quote=True)
+        desc_attr = html_lib.escape(str(m["desc"]), quote=True)
+        img_tag = (f'<img src="{html_lib.escape(m["preview_url"], quote=True)}" alt="{name_attr}" class="card-thumb">'
                    if m["has_preview"] else
                    '<div class="card-thumb-placeholder">3D 模型</div>')
 
-        btn_viewer = f'<a href="{m["viewer_url"]}" target="_blank" class="btn btn-primary">🌐 3D 旋转检视</a>' if m["has_viewer"] else ''
-        btn_stl = f'<a href="{m["stl_url"]}" download class="btn">⬇️ STL</a>' if m["has_stl"] else ''
-        btn_3mf = f'<a href="{m["mf_url"]}" download class="btn">⬇️ 3MF</a>' if m["has_3mf"] else ''
-        btn_scad = f'<a href="{m["scad_url"]}" download class="btn">💻 SCAD</a>' if m["has_scad"] else ''
+        btn_viewer = f'<a href="{html_lib.escape(m["viewer_url"], quote=True)}" target="_blank" class="btn btn-primary">🌐 3D 旋转检视</a>' if m["has_viewer"] else ''
+        btn_stl = f'<a href="{html_lib.escape(m["stl_url"], quote=True)}" download class="btn">⬇️ STL</a>' if m["has_stl"] else ''
+        btn_3mf = f'<a href="{html_lib.escape(m["mf_url"], quote=True)}" download class="btn">⬇️ 3MF</a>' if m["has_3mf"] else ''
+        btn_scad = f'<a href="{html_lib.escape(m["scad_url"], quote=True)}" download class="btn">💻 SCAD</a>' if m["has_scad"] else ''
 
         cards_html.append(f"""
-    <div class="card" data-name="{m['name'].lower()}" data-desc="{m['desc'].lower()}">
+    <div class="card" data-name="{name_attr}" data-desc="{desc_attr}">
       <div class="card-img-wrap">
         {img_tag}
         <span class="badge {badge_cls}">{m['doc_score']}分</span>
       </div>
       <div class="card-body">
-        <h3 class="card-title">{m['name']}</h3>
-        <p class="card-desc">{m['desc'] or 'OpenSCAD Agent 自动生成三维模型'}</p>
+        <h3 class="card-title">{name_attr}</h3>
+        <p class="card-desc">{html_lib.escape(str(m['desc']) or 'OpenSCAD Agent 自动生成三维模型')}</p>
         <div class="card-meta">
           <span>🧩 {m['parts_count']} 部件</span>
           <span>📐 {m['bbox']}</span>
@@ -373,8 +376,8 @@ const cards = document.querySelectorAll('.card');
 search.addEventListener('input', (e) => {{
   const query = e.target.value.toLowerCase().trim();
   cards.forEach(c => {{
-    const name = c.dataset.name || '';
-    const desc = c.dataset.desc || '';
+    const name = (c.dataset.name || '').toLowerCase();
+    const desc = (c.dataset.desc || '').toLowerCase();
     const match = name.includes(query) || desc.includes(query);
     c.style.display = match ? 'flex' : 'none';
   }});
