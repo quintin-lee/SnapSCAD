@@ -336,12 +336,24 @@ def _color_wrapper(color: Any) -> tuple[str, str]:
     return "", ""
 
 
+def _sanitize_module_name(raw: Any, fallback: str = "part") -> str:
+    """把 LLM 输出的部件 id 消毒为合法的 OpenSCAD 模块标识符。"""
+    s = str(raw).strip()
+    if not s:
+        return fallback
+    safe = "".join(c if c.isalnum() or c == "_" else "_" for c in s)
+    if not safe or safe[0].isdigit():
+        safe = f"p_{safe}"
+    return safe
+
+
 def _part_module(name: str, part: dict[str, Any]) -> list[str]:
     """生成一个 part 对应的 OpenSCAD 模块定义。
 
     支持 color 视觉颜色包裹，rotation 绕部件自身中心旋转。
+    模块名经过 _sanitize_module_name 消毒，避免 LLM 输出含空格/中文导致编译失败。
     """
-    part_name = part.get("id", name)
+    part_name = _sanitize_module_name(part.get("id", name), fallback=name)
     prim = part.get("primitive", "cube")
     center = part.get("center", [0, 0, 0])
     rotation = part.get("rotation") or [0, 0, 0]
@@ -513,9 +525,6 @@ def _estimate_part_min_z(part: dict[str, Any]) -> float:
     elif prim == "sphere" or prim == "capsule":
         r = float(size[0]) if size else 5.0
         return cz - (0 if prim == "capsule" else r)
-    elif prim == "sphere" or prim == "capsule":
-        r = float(size[0]) if size else 5.0
-        return cz - (0 if prim == "capsule" else r)
     elif prim in ("linear_extrude", "rotate_extrude", "text"):
         # linear_extrude / rotate_extrude / text 均向上拉伸，最低点为中心 Z
         return cz
@@ -599,7 +608,7 @@ def spec_to_scad(
     out.append(f"// assembly: {assembly.get('description', 'union of parts')}")
 
     # 计算各部件几何中心作为装配体展开基准 (Exploded View Vector)
-    part_map = {str(p.get("id", "")): p for p in parts}
+    part_map = {_sanitize_module_name(p.get("id", ""), fallback="part"): p for p in parts}
     centers = [p.get("center", [0, 0, 0]) for p in parts]
     if centers:
         avg_cx = sum(float(c[0]) if len(c) >= 1 else 0.0 for c in centers) / len(centers)
@@ -617,7 +626,7 @@ def spec_to_scad(
     out.append(f"module {safe_name}() {{")
     out.append("  union() {")
     for idx, pid in enumerate(union_ids):
-        pid_safe = str(pid)
+        pid_safe = _sanitize_module_name(pid, fallback="part")
         p_obj = part_map.get(pid_safe)
         if p_obj and len(union_ids) > 1:
             p_center = p_obj.get("center", [0, 0, 0])
@@ -644,10 +653,10 @@ def spec_to_scad(
         if others:
             out.append(f"module {safe_name}_final() {{")
             out.append(f"  difference() {{")
-            out.append(f"    {base}();")
+            out.append(f"    {_sanitize_module_name(base, fallback='part')}();")
             out.append("    union() {")
             for o in others:
-                out.append(f"      {o}();")
+                out.append(f"      {_sanitize_module_name(o, fallback='part')}();")
             out.append("    }")
             out.append("  }")
             out.append("}")
