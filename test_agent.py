@@ -186,10 +186,34 @@ def test_blueprint_and_explode():
 
 def test_lan_server_and_capture():
     """测试 10: 局域网 Web 资产共享服务与多端 IP 解析"""
-    from openscad_agent.server import serve_assets, get_local_lan_ip
+    from openscad_agent.server import serve_assets, stop_server, get_local_lan_ip
     loc, lan, port = serve_assets("out_test", port=8996, open_browser=False, blocking=False)
     assert "8996" in loc
     assert get_local_lan_ip() is not None
+    stop_server()  # 清理, 防止后续测试端口占用
+
+
+def test_text_relief_and_trim():
+    """测试 11: 3D 文字浮雕生成编译 + 审查会话修剪角色交替"""
+    # 3D 文字浮雕: linear_extrude 包裹 2D text() 路径 (OpenSCAD 2021.01 兼容)
+    spec = {"name": "text_fix", "parts": [{"id": "t", "primitive": "text", "text": "SNAPSCAD", "font_size": 10, "height": 2}]}
+    sp, sc, safe = write_spec_and_scad(spec, AgentConfig(output_dir="out_test"))
+    ok, msg = OpenscadRenderer(AgentConfig(output_dir="out_test")).validate(Path(sc))
+    assert ok, f"3D 文字浮雕编译失败: {msg[:300]}"
+
+    # 审查会话修剪: 模拟 8 轮审查后 conversation_history 角色严格交替
+    hist: list[dict] = []
+    for i in range(7):
+        hist.append({"role": "user", "content": f"u{i}"})
+        hist.append({"role": "assistant", "content": f"a{i}"})
+    hist.append({"role": "user", "content": "u7"})
+    if len(hist) > 6:
+        recent = len(hist) - 2
+        recent = recent - (recent % 2)
+        recent = min(recent, 4)
+        hist[:] = hist[:2] + hist[2 + (4 - recent):]
+    for i in range(1, len(hist)):
+        assert hist[i]["role"] != hist[i-1]["role"], f"审查修剪角色交替违规 @idx {i}: {[(h['role']) for h in hist]}"
 
 
 def run_all_tests() -> bool:
@@ -209,6 +233,7 @@ def run_all_tests() -> bool:
         ("本地离线端点识别与免 Key 认证网关", test_offline_gateway),
         ("机械爆炸图与四视图工业蓝图拼版合成", test_blueprint_and_explode),
         ("局域网 Web 资产共享服务与多端 IP 解析", test_lan_server_and_capture),
+        ("3D 文字浮雕生成编译与审查修剪角色交替", test_text_relief_and_trim),
     ]
 
     all_ok = True
@@ -221,7 +246,7 @@ def run_all_tests() -> bool:
     total_time = time.perf_counter() - t_start
     print("=" * 60)
     if all_ok:
-        print(f"🎉 全部 10 项核心测试用例 100% 通过！(总耗时: {total_time:.2f}s)")
+        print(f"🎉 全部 {len(suites)} 项核心测试用例 100% 通过！(总耗时: {total_time:.2f}s)")
     else:
         print(f"⚠️ 测试未全部通过，请检查上方失败项。(总耗时: {total_time:.2f}s)")
     print("=" * 60 + "\n")
