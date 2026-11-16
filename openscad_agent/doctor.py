@@ -38,8 +38,12 @@ class PrintabilityReport:
 
 
 def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """计算单个部件的世界坐标 Axis-Aligned Bounding Box (AABB)。"""
-    prim = p.get("primitive", "cube")
+    """计算单个部件的世界坐标 Axis-Aligned Bounding Box (AABB)。
+
+    polyhedron 部件: 从 points/faces 顶点坐标直接计算精确包围盒;
+    无有效顶点时回退 10×10×10 立方体估算, 不再返回 False 跳过。
+    """
+    prim = str(p.get("primitive", "cube")).lower()
     size = normalize_size(prim, p)
     center = p.get("center", [0, 0, 0])
     cx = float(center[0]) if len(center) >= 1 else 0.0
@@ -57,6 +61,25 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
     elif prim == "sphere":
         r = size[0] if size else 5.0
         return ((cx - r, cy - r, cz - r), (cx + r, cy + r, cz + r))
+    elif prim == "polyhedron":
+        # 优先从 LLM 提供的顶点坐标计算精确 AABB
+        points = p.get("points") or p.get("polygon") or []
+        valid: list[tuple[float, float, float]] = []
+        for pt in points:
+            if isinstance(pt, (list, tuple)) and len(pt) >= 3:
+                try:
+                    valid.append((float(pt[0]), float(pt[1]), float(pt[2])))
+                except (TypeError, ValueError):
+                    pass
+        if len(valid) >= 4:  # 至少 4 个有效顶点才有意义
+            min_x = min(v[0] for v in valid)
+            max_x = max(v[0] for v in valid)
+            min_y = min(v[1] for v in valid)
+            max_y = max(v[1] for v in valid)
+            min_z = min(v[2] for v in valid)
+            max_z = max(v[2] for v in valid)
+            return ((min_x, min_y, min_z), (max_x, max_y, max_z))
+        return ((cx - 10, cy - 10, cz), (cx + 10, cy + 10, cz + 10))
     else:
         return ((cx - 10, cy - 10, cz), (cx + 10, cy + 10, cz + 10))
 
@@ -89,8 +112,12 @@ def check_assembly_interference(parts: list[dict[str, Any]]) -> list[tuple[str, 
     return results
 
 
-def _estimate_primitive_volume_mm3(prim: str, size: list[float]) -> float:
-    """粗略估算基础几何体的体积 (mm³)。"""
+def _estimate_primitive_volume_mm3(prim: str, size: list[float], part: dict[str, Any] | None = None) -> float:
+    """粗略估算基础几何体的体积 (mm³)。
+
+    polyhedron: 若 part 提供 points 顶点坐标, 用包围盒体积近似 (比 1000mm³ 硬编码更准确)。
+    """
+    prim = str(prim).lower()
     if prim in ("cube", "cuboid", "box"):
         return size[0] * size[1] * size[2] if len(size) >= 3 else 1000.0
     elif prim == "cylinder":
@@ -105,6 +132,25 @@ def _estimate_primitive_volume_mm3(prim: str, size: list[float]) -> float:
         h = size[1] if len(size) >= 2 else 20.0
         cyl_h = max(h - 2 * r, 0.0)
         return (math.pi * (r ** 2) * cyl_h) + ((4.0 / 3.0) * math.pi * (r ** 3))
+    elif prim == "polyhedron" and part:
+        # 从顶点坐标计算包围盒体积近似 (比硬编码 1000mm³ 更准确)
+        points = part.get("points") or part.get("polygon") or []
+        valid: list[tuple[float, float, float]] = []
+        for pt in points:
+            if isinstance(pt, (list, tuple)) and len(pt) >= 3:
+                try:
+                    valid.append((float(pt[0]), float(pt[1]), float(pt[2])))
+                except (TypeError, ValueError):
+                    pass
+        if len(valid) >= 4:
+            min_x = min(v[0] for v in valid)
+            max_x = max(v[0] for v in valid)
+            min_y = min(v[1] for v in valid)
+            max_y = max(v[1] for v in valid)
+            min_z = min(v[2] for v in valid)
+            max_z = max(v[2] for v in valid)
+            return max(1.0, (max_x - min_x) * (max_y - min_y) * (max_z - min_z))
+        return 1000.0
     return 1000.0
 
 
@@ -215,7 +261,7 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
     for p in parts:
         prim = p.get("primitive", "cube")
         size = normalize_size(prim, p)
-        total_vol_mm3 += _estimate_primitive_volume_mm3(prim, size)
+        total_vol_mm3 += _estimate_primitive_volume_mm3(prim, size, part=p)
         for h in p.get("holes") or []:
             h_prim = h.get("primitive", "cube")
             h_size = normalize_hole_size(h_prim, h)
