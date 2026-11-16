@@ -320,7 +320,11 @@ class OpenscadAgent:
         best_score = -1.0
 
         def _render_views(scad: Path):
-            """渲染主预览 + 多视角，导出 3D 模型，返回 (主预览png, [额外视角pngs])。"""
+            """渲染主预览 + 多视角，导出 3D 模型，返回 (主预览png, [额外视角pngs])。
+
+            审查闭环内部重渲染时, 若 GUI 开启了 export_3mf/export_2d 开关,
+            会同步重新生成 3MF 切片文件与 2D 激光投影 (DXF+SVG), 避免交付模型与旧投影不一致。
+            """
             safe2 = scad.stem.replace("_scad", "")  # 去后缀安全名
             self.renderer.export_model(scad, Path(out_dir / f"{safe2}.{self.config.export_format}"))
             main_png = out_dir / f"{safe2}_preview.png"
@@ -328,6 +332,21 @@ class OpenscadAgent:
             extra = self.renderer.render_multi_view(
                 scad, main_png.with_name(f"{safe2}_v"), views=views, size=(500, 400)
             )
+            # 3MF 切片同步重渲染 (若 GUI 开关开启)
+            if getattr(self, "export_3mf", False):
+                try:
+                    self.renderer.export_3mf(scad, out_dir / f"{safe2}.3mf")
+                    _log.info("[review] 已同步重导出 3MF 切片文件: %s", safe2)
+                except Exception as e:
+                    _log.warning("[review] 3MF 同步重导出失败: %s", e)
+            # 2D 激光投影同步重渲染 (若 GUI 开关开启)
+            if getattr(self, "export_2d", False):
+                try:
+                    self.renderer.export_2d(scad, out_dir / f"{safe2}.dxf", "dxf")
+                    self.renderer.export_2d(scad, out_dir / f"{safe2}.svg", "svg")
+                    _log.info("[review] 已同步重导出 2D 激光投影: %s", safe2)
+                except Exception as e:
+                    _log.warning("[review] 2D 投影同步重导出失败: %s", e)
             return main_png, [p for p in extra if p != main_png]
 
         # 首轮渲染（若 _finalize 已渲染过 preview_png，直接复用其多视角）
@@ -431,6 +450,8 @@ class OpenscadAgent:
     ) -> bool:
         """将最优 spec 重新落盘并重新渲染，使交付的 3D 模型与回退后的规格一致。
 
+        若 GUI 开启了 export_3mf/export_2d 开关, 回退后同步重新生成 3MF 与 2D 投影,
+        避免交付包中 3D 模型与旧 2D 切片文件版本不一致。
         返回是否已成功重新渲染 (True 表示调用方无需再重复渲染)。
         """
         try:
@@ -444,6 +465,19 @@ class OpenscadAgent:
             preview_png = out_dir / f"{safe2}_preview.png"
             self.renderer.export_model(new_scad, model_file)
             self.renderer.render_preview(new_scad, preview_png)
+            # 3MF 切片同步重渲染 (若 GUI 开关开启)
+            if getattr(self, "export_3mf", False):
+                try:
+                    self.renderer.export_3mf(new_scad, out_dir / f"{safe2}.3mf")
+                except Exception as e:
+                    _log.warning("[review] 回退后 3MF 重导出失败: %s", e)
+            # 2D 激光投影同步重渲染 (若 GUI 开关开启)
+            if getattr(self, "export_2d", False):
+                try:
+                    self.renderer.export_2d(new_scad, out_dir / f"{safe2}.dxf", "dxf")
+                    self.renderer.export_2d(new_scad, out_dir / f"{safe2}.svg", "svg")
+                except Exception as e:
+                    _log.warning("[review] 回退后 2D 投影重导出失败: %s", e)
             _log.info("[review] 已将最优 spec 重新落盘并渲染: %s", safe2)
             return True
         except Exception as e:  # noqa: BLE001

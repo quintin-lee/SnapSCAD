@@ -275,12 +275,15 @@ def run_cli_wizard() -> int:
     print("\n[4/4] 附加选项:")
     review = (input("是否启用多视角视觉审查闭环? [Y/n, 默认 Y]: ").strip().lower() != "n")
     pack_zip = (input("是否一键打包全套工程 ZIP 归档? [y/N, 默认 N]: ").strip().lower() == "y")
+    export_2d = (input("是否同步导出 2D 激光切割投影 (DXF+SVG)? [y/N, 默认 N]: ").strip().lower() == "y")
 
     argv = ["--precision", precision, "--model", model, "--base-url", base_url]
     if not review:
         argv.append("--no-review")
     if pack_zip:
         argv.append("--zip")
+    if export_2d:
+        argv += ["--export-dxf", "--export-svg"]
     if hint:
         argv += ["--hint", hint]
 

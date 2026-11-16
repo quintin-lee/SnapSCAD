@@ -493,6 +493,17 @@ class MainWindow(QMainWindow):
         self.chk_edge_map.setChecked(True)
         param_lay.addWidget(self.chk_edge_map)
 
+        # 3D 切片文件与 2D 激光投影同步导出
+        self.chk_3mf = QPushButton("同步导出 3MF 切片文件 (Cura/Prusa 一键联动)")
+        self.chk_3mf.setCheckable(True)
+        self.chk_3mf.setChecked(True)
+        param_lay.addWidget(self.chk_3mf)
+
+        self.chk_2d = QPushButton("同步导出 2D 激光切割投影 (DXF+SVG)")
+        self.chk_2d.setCheckable(True)
+        self.chk_2d.setChecked(False)
+        param_lay.addWidget(self.chk_2d)
+
         lay.addWidget(self.param_box)
 
         lay.addStretch(1)
@@ -882,6 +893,8 @@ class MainWindow(QMainWindow):
         agent.max_fix_rounds = self.spn_fix_rounds.value()
         agent.max_review_rounds = self.spn_review_rounds.value()
         agent.enable_multi_view = self.chk_review.isChecked()  # 审查开启时才做多视角
+        agent.export_3mf = self.chk_3mf.isChecked()  # 3MF 切片同步导出开关
+        agent.export_2d = self.chk_2d.isChecked()   # 2D 激光投影 (DXF+SVG) 开关
         review = self.chk_review.isChecked() and bool(image_input)  # 仅图片场景可审查（需原图比对）
         self._worker = BuildWorker(agent, image_input, desc, hint, review=review, parent=self)
         self._worker.log_signal.connect(self.log)
@@ -953,6 +966,18 @@ class MainWindow(QMainWindow):
             self.log("✅ 建模成功")
             if result.model_file:
                 self.log(f"3D 模型: {result.model_file}")
+            # 3MF 切片文件同步导出反馈
+            if getattr(self, "chk_3mf", None) and self.chk_3mf.isChecked() and result.model_file:
+                p3mf = Path(result.model_file).with_suffix(".3mf")
+                if p3mf.exists():
+                    self.log(f"📦 已同步生成 3MF 切片文件: {p3mf.name}")
+            # 2D 激光投影同步导出反馈
+            if getattr(self, "chk_2d", None) and self.chk_2d.isChecked() and result.model_file:
+                pstem = Path(result.model_file).stem
+                for ext in ("dxf", "svg"):
+                    p2d = Path(result.model_file).with_suffix(f".{ext}")
+                    if p2d.exists():
+                        self.log(f"📐 已同步生成 2D 激光投影 ({ext.upper()}): {p2d.name}")
             doc = getattr(result, "doctor_report", None)
             if doc:
                 self.log(f"🩺 适印性自检: {doc.summary()} | 尺寸: {doc.bounding_box[0]}×{doc.bounding_box[1]}×{doc.bounding_box[2]}mm | 预估耗材: {doc.weight_g}g (约¥{doc.cost_cny})")
@@ -1565,6 +1590,10 @@ class MainWindow(QMainWindow):
             self.chk_review.setChecked(s.value("chk_review", True).lower() != "false")
         if s.contains("chk_edge_map"):
             self.chk_edge_map.setChecked(s.value("chk_edge_map", True).lower() != "false")
+        if s.contains("chk_3mf"):
+            self.chk_3mf.setChecked(s.value("chk_3mf", True).lower() != "false")
+        if s.contains("chk_2d"):
+            self.chk_2d.setChecked(s.value("chk_2d", False).lower() != "false")
         if s.contains("window_geometry"):
             self.restoreGeometry(s.value("window_geometry"))
         if s.contains("language") and s.value("language") == "en":
@@ -1591,6 +1620,8 @@ class MainWindow(QMainWindow):
         s.setValue("chk_render", str(self.chk_render.isChecked()))
         s.setValue("chk_review", str(self.chk_review.isChecked()))
         s.setValue("chk_edge_map", str(self.chk_edge_map.isChecked()))
+        s.setValue("chk_3mf", str(self.chk_3mf.isChecked()))
+        s.setValue("chk_2d", str(self.chk_2d.isChecked()))
         if hasattr(self, "main_splitter"):
             s.setValue("splitter_sizes", self.main_splitter.sizes())
         s.setValue("language", "en" if "English" in self.cmb_lang.currentText() else "zh")
