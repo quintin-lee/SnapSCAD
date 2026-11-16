@@ -237,13 +237,15 @@ class OpenscadAgent:
         # 6. 审查闭环：渲染图 vs 原图，不符合则自动修正重渲染
         review_rounds = 0
         spec_before_review = json.dumps(spec, sort_keys=True)  # 快照, 判断 spec 是否被审查修改
+        scad_rewritten = False  # 记录审查闭环内是否已重新落盘+渲染 (避免 _finalize 重复渲染)
         if review and original_image is not None and preview_png and Path(preview_png).exists():
             self.last_review = None
-            review_rounds = self._review_loop(spec, scad_path, safe, original_image,
-                                               preview_png, hint, model_file)
-            # 仅当审查闭环实际修改了 spec 时, 才重新落盘+渲染 (否则首轮已渲染过, 避免重复)
+            review_rounds, scad_rewritten = self._review_loop(
+                spec, scad_path, safe, original_image, preview_png, hint, model_file
+            )
+            # 仅当审查闭环实际修改了 spec 且尚未在循环内重新落盘渲染时, 才重新写盘+渲染
             spec_changed = json.dumps(spec, sort_keys=True) != spec_before_review
-            if spec_changed:
+            if spec_changed and not scad_rewritten:
                 spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
                 scad_path = Path(scad_path_str)
                 out_dir = Path(self.config.output_dir)
@@ -254,6 +256,8 @@ class OpenscadAgent:
                     self.renderer.render_preview(scad_path, Path(preview_png))
                 except RuntimeError as e:
                     errors.append(f"审查后重新渲染失败: {e}")
+            elif spec_changed and scad_rewritten:
+                _log.info("[agent] 审查闭环已回退至最优 spec 并在循环内完成重新落盘渲染, 跳过重复渲染")
 
         viewer_html: Optional[str] = None
         if model_file and Path(model_file).suffix.lower() == ".stl":
@@ -302,10 +306,11 @@ class OpenscadAgent:
         preview_png: str,
         hint: str,
         model_file: str,
-    ) -> int:
+    ) -> tuple[int, bool]:
         """审查闭环：预览图 vs 原图比对，不符合则修正规格并重渲染。
 
-        返回审查轮数。spec 就地修改（通过 self._apply_review_fix 写回调用方传入的 dict）。
+        返回 (审查轮数, scad 是否已在循环内重新落盘渲染)。
+        spec 就地修改（通过 self._apply_review_fix 写回调用方传入的 dict）。
         """
         out_dir = Path(self.config.output_dir)
         max_review = getattr(self, "max_review_rounds", 3)
@@ -358,7 +363,7 @@ class OpenscadAgent:
                 # 符合预期，成功收敛
                 best_score = cur_score
                 self.last_review = verdict
-                return i
+                return i, False
 
             # 记录迄今最好的一版（用于回退）
             if cur_score > best_score:
@@ -370,23 +375,23 @@ class OpenscadAgent:
             if not patch:
                 _log.warning("[review] LLM 判为不符合但未给出 spec_patch，停止: %s", verdict.get('issues'))
                 self.last_review = verdict
-                break
+                return i, False
             try:
                 new_spec = self._merge_spec_patch(spec, patch)
             except Exception as e:  # noqa: BLE001
                 _log.warning("[review] 应用 spec_patch 失败: %s，停止", e)
                 self.last_review = verdict
-                break
+                return i, False
 
-            # 回归保护：若 LLM 修正规格使部件数减少（简化而非补全）→ 拒绝该修正
+            # 回归保护：若 LLM 修正规格使部件数减少（简化而非补全）→ 拒绝该修正，回退最优 spec
             old_cnt = len(spec.get("parts", []))
             new_cnt = len(new_spec.get("parts", []))
             if new_cnt < old_cnt:
-                _log.warning("[review] LLM 修正减少部件数 (%d->%d)，视为回归，拒绝并停止", old_cnt, new_cnt)
+                _log.warning("[review] LLM 修正减少部件数 (%d->%d)，视为回归，拒绝并回退最优 spec", old_cnt, new_cnt)
                 spec.clear()
                 spec.update(best_spec)
                 self.last_review = verdict
-                break
+                return i, self._rewind_best_spec(best_spec, safe, out_dir)
 
             # 写回 spec（就地更新调用方的 dict）
             spec.clear()
@@ -397,7 +402,7 @@ class OpenscadAgent:
             if not ok:
                 _log.warning("[review] 修正后 spec 编译失败: %s，停止", cerr[:300])
                 self.last_review = verdict
-                break
+                return i, False
             # 重渲染主预览 + 多视角
             try:
                 new_main, new_extra = _render_views(new_scad)
@@ -406,18 +411,44 @@ class OpenscadAgent:
             except RuntimeError as e:
                 _log.warning("[review] 重渲染失败: %s，停止", e)
                 self.last_review = verdict
-                break
+                return i, False
             _log.info("[review] 已修正规格并重渲染 (round %d)", i)
 
         # 若循环结束仍 match=false（未收敛），回退到迄今得分最高的 spec，
         # 避免把模型越改越糟（LLM 可能简化而非补全）。
+        rewound = False
         if best_spec is not spec and best_score > -1.0:
             _log.info("[review] 未收敛，回退到得分最高的 spec (score=%s)", best_score)
             spec.clear()
             spec.update(best_spec)
+            rewound = self._rewind_best_spec(best_spec, safe, out_dir)
 
         self.last_review = getattr(self, "last_review", None)
-        return min(max_review, 99)
+        return min(max_review, 99), rewound
+
+    def _rewind_best_spec(
+        self, best_spec: dict[str, Any], safe: str, out_dir: Path
+    ) -> bool:
+        """将最优 spec 重新落盘并重新渲染，使交付的 3D 模型与回退后的规格一致。
+
+        返回是否已成功重新渲染 (True 表示调用方无需再重复渲染)。
+        """
+        try:
+            spec_path_str, scad_path_str, safe2 = write_spec_and_scad(best_spec, self.config, tag=safe)
+            new_scad = Path(scad_path_str)
+            ok, cerr = self.renderer.validate(new_scad)
+            if not ok:
+                _log.warning("[review] 回退 spec 重新编译失败: %s", cerr[:200])
+                return False
+            model_file = out_dir / f"{safe2}.{self.config.export_format}"
+            preview_png = out_dir / f"{safe2}_preview.png"
+            self.renderer.export_model(new_scad, model_file)
+            self.renderer.render_preview(new_scad, preview_png)
+            _log.info("[review] 已将最优 spec 重新落盘并渲染: %s", safe2)
+            return True
+        except Exception as e:  # noqa: BLE001
+            _log.warning("[review] 回退重新渲染异常: %s", e)
+            return False
 
     @staticmethod
     def _merge_spec_patch(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
