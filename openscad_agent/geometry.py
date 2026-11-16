@@ -10,11 +10,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from .core import AgentConfig
-from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole
+from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole, validate_spec
 from .doctor import check_printability
+from .log import get_logger as _log_module
+
+_log = _log_module()
 
 
 def _fmt(v: float) -> str:
@@ -694,11 +698,6 @@ def write_spec_and_scad(
 
     写盘前先经 spec.validate_spec 规范化/校验，保证生成的 .scad 可编译。
     """
-    from pathlib import Path
-    from .spec import validate_spec
-    from openscad_agent.log import get_logger
-    _log = get_logger()
-
     out_dir = Path(config.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     # 规范化 + 校验（补全缺省/修正类型/去重 id/过滤未知 union）
