@@ -487,6 +487,12 @@ class MainWindow(QMainWindow):
         self.chk_review.setChecked(True)
         param_lay.addWidget(self.chk_review)
 
+        # Canny 几何边缘轮廓并联辅助 (Dual-Vision)
+        self.chk_edge_map = QPushButton("并联 Canny 物理边缘轮廓图 (消除光影反光干扰)")
+        self.chk_edge_map.setCheckable(True)
+        self.chk_edge_map.setChecked(True)
+        param_lay.addWidget(self.chk_edge_map)
+
         lay.addWidget(self.param_box)
 
         lay.addStretch(1)
@@ -859,6 +865,7 @@ class MainWindow(QMainWindow):
             temperature=self.spn_temperature.value(),
             render_precision=self.cmb_precision.currentText(),
             image_max_side=self.spn_max_side.value(),
+            enable_edge_map=self.chk_edge_map.isChecked(),
         )
         # 把审查/修复轮数写入 agent
         if not config.api_key and not config.is_local_endpoint:
@@ -1556,6 +1563,8 @@ class MainWindow(QMainWindow):
             self.chk_render.setChecked(s.value("chk_render", True).lower() != "false")
         if s.contains("chk_review"):
             self.chk_review.setChecked(s.value("chk_review", True).lower() != "false")
+        if s.contains("chk_edge_map"):
+            self.chk_edge_map.setChecked(s.value("chk_edge_map", True).lower() != "false")
         if s.contains("window_geometry"):
             self.restoreGeometry(s.value("window_geometry"))
         if s.contains("language") and s.value("language") == "en":
@@ -1581,6 +1590,7 @@ class MainWindow(QMainWindow):
         s.setValue("review_rounds", str(self.spn_review_rounds.value()))
         s.setValue("chk_render", str(self.chk_render.isChecked()))
         s.setValue("chk_review", str(self.chk_review.isChecked()))
+        s.setValue("chk_edge_map", str(self.chk_edge_map.isChecked()))
         if hasattr(self, "main_splitter"):
             s.setValue("splitter_sizes", self.main_splitter.sizes())
         s.setValue("language", "en" if "English" in self.cmb_lang.currentText() else "zh")
