@@ -104,27 +104,31 @@ def serve_assets(
     if not gallery_p.exists():
         generate_gallery(out_dir)
 
-    # 端口冲突预检: 若指定端口已被占用, 提示并自动寻找空闲端口
-    if is_port_in_use(port):
-        free_port = find_free_port(port + 1)
-        if free_port != port:
-            print(f"⚠️  端口 {port} 已被占用, 自动切换到 {free_port}")
-            _log.warning("[server] 端口 %d 被占用, 自动切换到 %d", port, free_port)
-    else:
-        free_port = port
     handler = functools.partial(SimpleHTTPRequestHandler, directory=str(out_dir))
 
     class QuietServer(HTTPServer):
         def log_message(self, format, *args):  # noqa: A002
             pass
 
-    httpd = QuietServer(("0.0.0.0", free_port), handler)
+    # 端口竞态保护: 指定端口被占用时自动寻找空闲端口, 绑定失败再尝试下一个
+    actual_port = port
+    try:
+        if is_port_in_use(port):
+            actual_port = find_free_port(port + 1)
+            print(f"⚠️  端口 {port} 已被占用, 自动切换到 {actual_port}")
+            _log.warning("[server] 端口 %d 被占用, 自动切换到 %d", port, actual_port)
+        httpd = QuietServer(("0.0.0.0", actual_port), handler)
+    except OSError as e:
+        _log.warning("[server] 绑定端口 %d 失败 (%s), 重新寻找空闲端口", actual_port, e)
+        actual_port = find_free_port(port + 1)
+        httpd = QuietServer(("0.0.0.0", actual_port), handler)
+
     with _lock:
         _active_httpd = httpd
 
     lan_ip = get_local_lan_ip()
-    local_url = f"http://localhost:{free_port}/gallery.html"
-    lan_url = f"http://{lan_ip}:{free_port}/gallery.html"
+    local_url = f"http://localhost:{actual_port}/gallery.html"
+    lan_url = f"http://{lan_ip}:{actual_port}/gallery.html"
 
     print("\n" + "=" * 60)
     print("📡 SnapSCAD 局域网 3D 资产服务已启动!")
@@ -155,7 +159,7 @@ def serve_assets(
             _server_thread = t
         t.start()
 
-    return local_url, lan_url, free_port
+    return local_url, lan_url, actual_port
 
 
 __all__ = ["serve_assets", "stop_server", "get_local_lan_ip", "find_free_port", "is_port_in_use"]
