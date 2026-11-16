@@ -43,9 +43,10 @@ def find_executable(name: str) -> str:
         f"/usr/bin/{name}",
         f"/usr/local/bin/{name}",
     ]
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
     win_candidates = [
-        f"{os.environ.get('ProgramFiles', r'C:\Program Files')}\\OpenSCAD\\bin\\{name}.exe",
-        f"{os.environ.get('ProgramFiles', r'C:\Program Files')}\\openscad.exe",
+        f"{program_files}\\OpenSCAD\\bin\\{name}.exe",
+        f"{program_files}\\openscad.exe",
     ]
     candidates = posix_candidates + win_candidates
     for c in candidates:
