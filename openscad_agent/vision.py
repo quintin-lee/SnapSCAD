@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -334,7 +335,6 @@ class AgnesVision:
             wait = min(base_wait * (2 ** (attempt - 1)), 60)
             _log.warning("[agnes] HTTP %s (尝试 %d/%d): %s", code, attempt, max_attempts, detail)
             _log.info("[agnes] %ss 后重试…", wait)
-            import time
             time.sleep(wait)
 
         raise RuntimeError("Agnes API 重试耗尽")
@@ -495,7 +495,6 @@ class AgnesVision:
 
     @staticmethod
     def _backoff(attempt: int, reason: str) -> None:
-        import time
         wait = min(5 * (2 ** (attempt - 1)), 30)
         _log.warning("[agnes] %s (尝试 %d)，%ss 后重试…", reason, attempt, wait)
         time.sleep(wait)
