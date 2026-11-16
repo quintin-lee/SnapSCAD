@@ -694,7 +694,7 @@ class MainWindow(QMainWindow):
     # 事件处理
     # ------------------------------------------------------------------
 
-    def on_language_changed(self) -> None:
+    def on_language_changed(self, _index: int = 0) -> None:
         """多语言切换：在简体中文与 English 间无缝热切。"""
         lang = "en" if "English" in self.cmb_lang.currentText() else "zh"
         d = self.I18N.get(lang, self.I18N["zh"])
@@ -1626,14 +1626,39 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _connect_settings_signals(self) -> None:
-        """任何参数变更时自动保存。"""
-        for widget in (
-            self.txt_model, self.txt_base_url, self.txt_outdir,
-            self.spn_temperature, self.spn_max_side,
-            self.spn_fix_rounds, self.spn_review_rounds,
-        ):
-            widget.textChanged if hasattr(widget, "textChanged") else widget.valueChanged
-        # 简单策略：窗口关闭时保存
+        """参数变更即时持久化: 文本/数值/选择控件变更即写 QSettings，避免关闭窗口前未保存。"""
+        text_widgets = (self.txt_model, self.txt_base_url, self.txt_outdir)
+        for w in text_widgets:
+            w.textChanged.connect(lambda _text, w=w: self._settings.setValue(
+                {self.txt_model: "model", self.txt_base_url: "base_url", self.txt_outdir: "out_dir"}[w],
+                w.text().strip()
+            ))
+        spin_widgets = {
+            self.spn_temperature: "temperature",
+            self.spn_max_side: "max_side",
+            self.spn_fix_rounds: "fix_rounds",
+            self.spn_review_rounds: "review_rounds",
+        }
+        for w, key in spin_widgets.items():
+            w.valueChanged.connect(lambda _v, k=key: self._settings.setValue(k, str(w.value())))
+        combo_widgets = {
+            self.cmb_format: "format",
+            self.cmb_precision: "precision",
+            self.cmb_lang: "language",
+        }
+        for w, key in combo_widgets.items():
+            w.currentTextChanged.connect(lambda _text, w=w, k=key: self._settings.setValue(
+                k, "en" if k == "language" and "English" in _text else _text
+            ))
+        chk_widgets = {
+            self.chk_render: "chk_render",
+            self.chk_review: "chk_review",
+            self.chk_edge_map: "chk_edge_map",
+            self.chk_3mf: "chk_3mf",
+            self.chk_2d: "chk_2d",
+        }
+        for w, key in chk_widgets.items():
+            w.toggled.connect(lambda _checked, k=key: self._settings.setValue(k, str(w.isChecked())))
 
     def _load_settings(self) -> None:
         s = self._settings
