@@ -641,6 +641,16 @@ class MainWindow(QMainWindow):
         self.btn_open_dir = QPushButton("📁 打开输出目录")
         self.btn_open_dir.clicked.connect(self.on_open_output_dir)
         act_bar.addWidget(self.btn_open_dir)
+
+        # 建模结果全量输出面板 (切片指导书 + 多视角预览 + 查看器状态)
+        self.lbl_result_info = QLabel("")
+        self.lbl_result_info.setWordWrap(True)
+        self.lbl_result_info.setStyleSheet(
+            "QLabel { background-color: rgba(5,150,105,0.12); border: 1px solid rgba(5,150,105,0.35); "
+            "border-radius: 6px; padding: 6px; font-size: 12px; }"
+        )
+        self.lbl_result_info.hide()  # 建模完成前隐藏
+        lay.addWidget(self.lbl_result_info)
         lay.addLayout(act_bar)
 
         self.tabs_assets = QTabWidget()
@@ -996,6 +1006,8 @@ class MainWindow(QMainWindow):
                     self.log(f"   问题: {iss}")
             elif rr:
                 self.log(f"🔍 审查闭环: {rr} 轮（已收敛）")
+            # 建模结果全量输出面板 (切片指导书 + 查看器 + 多视角预览 + 3MF/2D)
+            self._update_result_panel(result)
         else:
             self.log(f"❌ 失败: {'; '.join(result.errors)}")
 
@@ -1005,6 +1017,57 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.lbl_status.setText("错误")
         self.log(f"❌ 错误: {msg}")
+
+    def _update_result_panel(self, result) -> None:
+        """建模完成后更新结果面板: 汇总展示全量输出资产。
+
+        补齐 CLI 全量输出在 GUI 侧的可视化反馈:
+        - 切片指导书路径 (print_guide)
+        - 3D 网页查看器路径 (viewer_html)
+        - 多视角预览图数量 (多视角 png 文件)
+        - 3MF/2D 文件状态
+        """
+        lines: list[str] = []
+        model_file = getattr(result, "model_file", None)
+        out_dir = Path(model_file).parent if model_file else None
+
+        # 切片指导书
+        print_guide = getattr(result, "print_guide", None)
+        if print_guide and Path(print_guide).exists():
+            lines.append(f"📄 切片指导书: {Path(print_guide).name}")
+
+        # 3D 网页查看器
+        viewer_html = getattr(result, "viewer_html", None)
+        if viewer_html and Path(viewer_html).exists():
+            lines.append(f"🌐 3D 查看器: {Path(viewer_html).name}")
+
+        # 多视角预览图
+        if out_dir and model_file:
+            stem = Path(model_file).stem
+            multi_views = sorted(out_dir.glob(f"{stem}_v_*.png"))
+            if multi_views:
+                lines.append(f"📸 多视角预览: {len(multi_views)} 张")
+            # 3MF 状态
+            p3mf = out_dir / f"{stem}.3mf"
+            if p3mf.exists():
+                lines.append(f"📦 3MF 切片: {p3mf.name}")
+            # 2D 投影状态
+            p2d = [out_dir / f"{stem}.{ext}" for ext in ("dxf", "svg") if (out_dir / f"{stem}.{ext}").exists()]
+            if p2d:
+                lines.append(f"📐 2D 投影: {', '.join(p.name for p in p2d)}")
+
+        # 装配干涉检测结果 (doctor_report)
+        doc = getattr(result, "doctor_report", None)
+        if doc and doc.warnings:
+            for w in doc.warnings[:3]:
+                lines.append(f"⚠️ {w}")
+
+        if lines:
+            text = " | ".join(lines)
+            self.lbl_result_info.setText(f"<b>✅ 全量输出:</b> {text}")
+            self.lbl_result_info.show()
+        else:
+            self.lbl_result_info.hide()
 
     def on_switch_view(self, view_name: str) -> None:
         """切换预览视角显示（已渲染则秒切，未预渲染则即时生成）。"""
