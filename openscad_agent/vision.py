@@ -455,19 +455,30 @@ class AgnesVision:
                     "verdict": f"审查跳过: {e}", "skipped": True}
 
     @staticmethod
-    def _extract_review(content: str) -> dict[str, Any]:
-        """从 LLM 回复中提取审查 JSON。失败时保守放行。"""
-        text = content.strip()
+    def _strip_code_fence(text: str) -> str:
+        """从 LLM 回复中提取 JSON 对象, 容忍 markdown 代码块与前后杂文。
+
+        先尝试 ```json 围栏, 再回退首/尾大括号切片, 两者都失败时抛出异常。
+        被 _extract_review 与 _extract_spec 共用, 消除两处重复的正则匹配逻辑。
+        """
+        text = text.strip()
         m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
         if m:
-            text = m.group(1)
-        else:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start == -1 or end == -1:
-                return {"match": True, "score": -1.0, "issues": [],
-                        "verdict": "无法解析审查结果，保守放行", "skipped": True}
-            text = text[start : end + 1]
+            return m.group(1)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1:
+            raise ValueError("LLM 未返回 JSON 对象")
+        return text[start : end + 1]
+
+    @classmethod
+    def _extract_review(cls, content: str) -> dict[str, Any]:
+        """从 LLM 回复中提取审查 JSON。失败时保守放行。"""
+        try:
+            text = cls._strip_code_fence(content)
+        except ValueError:
+            return {"match": True, "score": -1.0, "issues": [],
+                    "verdict": "无法解析审查结果，保守放行", "skipped": True}
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
@@ -499,19 +510,13 @@ class AgnesVision:
         _log.warning("[agnes] %s (尝试 %d)，%ss 后重试…", reason, attempt, wait)
         time.sleep(wait)
 
-    @staticmethod
-    def _extract_spec(content: str) -> dict[str, Any]:
+    @classmethod
+    def _extract_spec(cls, content: str) -> dict[str, Any]:
         """从 LLM 回复中提取 JSON 对象，容忍 markdown 代码块与前后杂文。"""
-        text = content.strip()
-        m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
-        if m:
-            text = m.group(1)
-        else:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start == -1 or end == -1:
-                raise SpecParseError(f"LLM 未返回 JSON 对象: {content[:300]!r}")
-            text = text[start : end + 1]
+        try:
+            text = cls._strip_code_fence(content)
+        except ValueError as e:
+            raise SpecParseError(f"LLM 未返回 JSON 对象: {content[:300]!r}") from e
         try:
             spec = json.loads(text)
         except json.JSONDecodeError as e:
