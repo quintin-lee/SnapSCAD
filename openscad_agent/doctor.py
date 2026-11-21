@@ -55,7 +55,7 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
         return ((cx - w / 2, cy - d / 2, cz), (cx + w / 2, cy + d / 2, cz + h))
     elif prim in ("cylinder", "capsule"):
         d = size[0]
-        h = size[1] if len(size) >= 2 else 10.0
+        h = size[2] if len(size) >= 3 else (size[1] if len(size) >= 2 else 10.0)
         r = d / 2.0
         return ((cx - r, cy - r, cz), (cx + r, cy + r, cz + h))
     elif prim == "sphere":
@@ -198,7 +198,7 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
 
         elif prim in ("cylinder", "capsule"):
             d = size[0]
-            h = size[1] if len(size) >= 2 else 10.0
+            h = size[2] if len(size) >= 3 else (size[1] if len(size) >= 2 else 10.0)
             r = d / 2.0
             if d < 0.8:
                 report.warnings.append(f"部件 '{pid}' 直径过小 ({d:.2f}mm)，打印易折断")

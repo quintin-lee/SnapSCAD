@@ -112,20 +112,43 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         if p == "cylinder":
             return [v * 2, v]
     if isinstance(raw, list) and raw:
-        clean = [_sanitize_num(x, 10.0) for x in raw[:3] or [10.0, 10.0, 10.0]] or [10.0] * 3
         if p in ("cube", "cuboid", "box"):
-            fillet = _sanitize_num(part.get("fillet", part.get("chamfer", 0.0)), 0.0)
+            clean = [_sanitize_num(x, 10.0) for x in raw[:3] or [10.0, 10.0, 10.0]] or [10.0] * 3
+            fillet = _sanitize_num(part.get("fillet", 0.0), 0.0)
+            chamfer = _sanitize_num(part.get("chamfer", 0.0), 0.0)
+            if len(raw) >= 4 and float(raw[3]) > 0.0:
+                fillet = float(raw[3])
+            if len(raw) >= 5 and float(raw[4]) > 0.0:
+                chamfer = float(raw[4])
             if fillet > 0.0:
-                clean.append(fillet)
+                clean = clean[:3] + [fillet, 0.0]
+            elif chamfer > 0.0:
+                clean = clean[:3] + [0.0, chamfer]
+            return clean
+        if p == "cylinder":
+            chamfer = _sanitize_num(part.get("chamfer", 0.0), 0.0)
+            if len(raw) >= 4 and float(raw[3]) > 0.0:
+                chamfer = float(raw[3])
+            if chamfer > 0.0:
+                d = _sanitize_num(raw[0], 10.0)
+                h = _sanitize_num(raw[2] if len(raw) >= 3 else raw[1], 10.0)
+                return [d, d, h, chamfer]
+            if len(raw) >= 3:
+                return [_sanitize_num(raw[0], 10.0), _sanitize_num(raw[1], 10.0), _sanitize_num(raw[2], 10.0)]
+            return [_sanitize_num(raw[0], 10.0), _sanitize_num(raw[1], 10.0)]
+        clean = [_sanitize_num(x, 10.0) for x in raw[:3] or [10.0, 10.0, 10.0]] or [10.0] * 3
         return clean
     # 从其他字段推断
     if p in ("cube", "cuboid", "box"):
         w = _sanitize_num(part.get("width", part.get("x", 10)), 10.0)
         d = _sanitize_num(part.get("depth", part.get("y", 10)), 10.0)
         h = _sanitize_num(part.get("height", part.get("z", 10)), 10.0)
-        fillet = _sanitize_num(part.get("fillet", part.get("chamfer", 0.0)), 0.0)
+        fillet = _sanitize_num(part.get("fillet", 0.0), 0.0)
+        chamfer = _sanitize_num(part.get("chamfer", 0.0), 0.0)
         if fillet > 0.0:
-            return [w, d, h, fillet]
+            return [w, d, h, fillet, 0.0]
+        elif chamfer > 0.0:
+            return [w, d, h, 0.0, chamfer]
         return [w, d, h]
     if p == "cylinder":
         # 显式三元组 [d1, d2, h] 支持圆台/圆锥
@@ -145,6 +168,9 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         r = _sanitize_num(part.get("radius", 5), 5.0)
         d = _sanitize_num(part.get("diameter", r * 2), r * 2)
         h = _sanitize_num(part.get("height", 10), 10.0)
+        chamfer = _sanitize_num(part.get("chamfer", 0.0), 0.0)
+        if chamfer > 0.0:
+            return [d, d, h, chamfer]
         return [d, h]
     if p == "sphere":
         return [_sanitize_num(part.get("radius", 5), 5.0)]
@@ -225,6 +251,12 @@ def normalize_part(part: dict[str, Any], default_id: str = "part") -> dict[str, 
     color = _sanitize_color(part.get("color"))
     if color is not None:
         out["color"] = color
+    fillet = _sanitize_num(part.get("fillet", 0.0), 0.0)
+    if fillet > 0.0:
+        out["fillet"] = fillet
+    chamfer = _sanitize_num(part.get("chamfer", 0.0), 0.0)
+    if chamfer > 0.0:
+        out["chamfer"] = chamfer
     if part.get("symmetric") or part.get("symmetry"):
         out["symmetric"] = True
     if "mirror" in part and part.get("mirror"):
@@ -343,6 +375,10 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
                 p["height"] = _scale_geom(p["height"], factor)
             if "radius" in p:
                 p["radius"] = _scale_geom(p["radius"], factor)
+            if "fillet" in p:
+                p["fillet"] = _scale_geom(p["fillet"], factor)
+            if "chamfer" in p:
+                p["chamfer"] = _scale_geom(p["chamfer"], factor)
             if "r1" in p:
                 p["r1"] = _scale_geom(p["r1"], factor)
             if "r2" in p:

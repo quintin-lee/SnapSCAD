@@ -571,7 +571,8 @@ SPEC_SCHEMA = """\
       "height": N,          // 圆柱/胶囊/拉伸专用（size 缺省时使用）
       "r1": N,              // 圆锥/圆台底半径 (可选)
       "r2": N,              // 圆锥/圆台顶半径 (可选，为 0 则为尖锥)
-      "fillet": N,          // 立方体可选平滑倒圆角半径 (mm，自动生成倒角圆角柱)
+      "fillet": N,          // 立方体可选平滑倒圆角半径 (mm，自动生成平滑倒角圆角柱)
+      "chamfer": N,         // 立方体/圆柱立柱可选 45 度平滑倒棱角 (mm, 棱边倒角/顶部机械导入角)
       "polygon": [[x,y],...], // 2D 草图多边形点列 (用于 linear_extrude/rotate_extrude)
       "color": "string|[r,g,b]", // 部件视觉颜色（如 "dimgray", "firebrick", "gold", "#e67e22"），帮助预览图区分各语义部件
       "symmetric": true,    // 可选，沿X轴双侧镜像对称 (如翅膀、把手、双足对称结构)

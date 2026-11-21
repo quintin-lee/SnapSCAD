@@ -28,9 +28,24 @@ def _fmt(v: float) -> str:
 
 
 def _cylinder_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
-    """圆柱/圆锥生成器。
-    size = [直径, 高度] 或 [底面直径d1, 顶面直径d2, 高度h] (圆锥/圆台)。
+    """圆柱/圆锥/倒角立柱生成器。
+    size = [直径, 高度] 或 [底面直径d1, 顶面直径d2, 高度h] (圆锥/圆台)
+    或 [直径, 直径, 高度, chamfer] (带顶部45度机械导入倒角立柱)。
     """
+    if len(size) >= 4 and float(size[3]) > 1e-4:
+        d = float(size[0])
+        h = float(size[2])
+        c = min(float(size[3]), h * 0.45, d / 2.0 - 0.1)
+        cx, cy, cz = (float(center[i]) for i in range(3))
+        r = d / 2.0
+        lines = [f"  // {note} (顶部倒角 chamfer c={_fmt(c)}mm)" if note else f"  // chamfered cylinder (c={_fmt(c)}mm)"]
+        lines.append(f"  translate([{_fmt(cx - r)}, {_fmt(cy - r)}, {_fmt(cz)}]) {{")
+        lines.append(f"    cylinder(h = {_fmt(h - c)}, d = {_fmt(d)}, center = false);")
+        lines.append(f"    translate([0, 0, {_fmt(h - c)}])")
+        lines.append(f"      cylinder(h = {_fmt(c)}, d1 = {_fmt(d)}, d2 = {_fmt(d - 2 * c)}, center = false);")
+        lines.append("  }")
+        return "\n".join(lines)
+
     if len(size) >= 3:
         d1, d2, h = float(size[0]), float(size[1]), float(size[2])
     else:
@@ -50,12 +65,23 @@ def _cylinder_code(size: list[float], center: list[float], holes: list[dict], no
 def _cube_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
     x, y, z = (float(size[i]) for i in range(3))
     fillet = float(size[3]) if len(size) >= 4 else 0.0
+    chamfer = float(size[4]) if len(size) >= 5 else 0.0
     cx, cy, cz = (float(center[i]) for i in range(3))
 
-    # 安全约束：倒圆角半径不能超过半宽或半深
+    # 安全约束：倒角/倒圆角半径不能超过半宽或半深
     fillet = min(fillet, min(x, y) / 2.0 - 0.01) if fillet > 0.0 else 0.0
+    chamfer = min(chamfer, min(x, y) / 2.0 - 0.01) if chamfer > 0.0 else 0.0
 
-    if fillet > 1e-4:
+    if chamfer > 1e-4:
+        lines = [f"  // {note} (平滑倒角 chamfer c={_fmt(chamfer)}mm)" if note else f"  // chamfered cube (c={_fmt(chamfer)}mm)"]
+        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+        lines.append(f"    linear_extrude(height = {_fmt(z)}) {{")
+        lines.append(f"      offset(delta = {_fmt(chamfer)}, chamfer = true) {{")
+        lines.append(f"        square([{_fmt(x - 2 * chamfer)}, {_fmt(y - 2 * chamfer)}], center = true);")
+        lines.append("      }")
+        lines.append("    }")
+        return "\n".join(lines)
+    elif fillet > 1e-4:
         lines = [f"  // {note} (圆角倒角 r={_fmt(fillet)}mm)" if note else f"  // rounded cube (r={_fmt(fillet)}mm)"]
         lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
         lines.append(f"    linear_extrude(height = {_fmt(z)}) {{")

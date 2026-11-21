@@ -251,6 +251,34 @@ def test_csg_assembly():
     assert ok, f"CSG 装配编译失败: {msg}"
 
 
+def test_chamfer_features():
+    """测试 13: 45度棱角平滑倒角 (chamfer) 规范化与 OpenSCAD 真实编译"""
+    spec = {
+        "name": "test_chamfer_model",
+        "units": "cm",
+        "parts": [
+            {"id": "chamfer_box", "primitive": "cube", "size": [4, 4, 2], "chamfer": 0.3, "center": [0, 0, 0]},
+            {"id": "chamfer_pin", "primitive": "cylinder", "radius": 0.8, "height": 3, "chamfer": 0.2, "center": [0, 0, 2]},
+        ],
+        "assembly": {"union_parts": ["chamfer_box", "chamfer_pin"]}
+    }
+    norm_spec, _ = validate_spec(spec)
+    assert norm_spec["units"] == "mm"
+    # 0.3cm -> 3mm chamfer
+    assert norm_spec["parts"][0]["chamfer"] == 3.0
+    assert norm_spec["parts"][1]["chamfer"] == 2.0
+
+    cfg = AgentConfig(output_dir="out_test")
+    sp, sc, safe = write_spec_and_scad(norm_spec, cfg)
+    sc_text = Path(sc).read_text(encoding="utf-8")
+    assert "chamfer = true" in sc_text
+    assert "chamfered cylinder" in sc_text or "顶部倒角 chamfer" in sc_text
+
+    r = OpenscadRenderer(cfg)
+    ok, msg = r.validate(Path(sc))
+    assert ok, f"倒角模型编译失败: {msg}"
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -262,6 +290,7 @@ def run_all_tests() -> bool:
         ("规格规范化、多单位换算与紧固件解析", test_spec_and_units),
         ("几何转译与真实 OpenSCAD CGAL 编译", test_geometry_and_compilation),
         ("CSG 树层级与布尔装配 (交集/差集/并集)", test_csg_assembly),
+        ("45度棱边倒角与立柱导入角 (chamfer)", test_chamfer_features),
         ("多格式渲染矩阵 (binstl/3mf/dxf/svg/png)", test_multi_formats_export),
         ("3D 打印体检系统与切片指导书生成", test_doctor_and_guide),
         ("独立 HTML 3D 查看器与全景展厅画廊", test_viewer_and_gallery),
