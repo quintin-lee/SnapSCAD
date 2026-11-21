@@ -389,6 +389,18 @@ def test_material_profiles():
     assert "250°C" in guide_content
 
 
+def test_gui_embedded_viewport():
+    """测试 16: GUI 嵌入式 3D 交互视口与双模渲染切换"""
+    gui_text = Path("gui.py").read_text(encoding="utf-8")
+    tree = ast.parse(gui_text)
+    assert tree is not None
+    assert "on_switch_to_3d_viewport" in gui_text
+    assert "preview_stack" in gui_text
+    assert "HAS_WEBENGINE" in gui_text
+    assert "btn_view_3d" in gui_text
+    assert "_load_3d_viewer" in gui_text
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -411,6 +423,7 @@ def run_all_tests() -> bool:
         ("机械爆炸图与四视图工业蓝图拼版合成", test_blueprint_and_explode),
         ("局域网 Web 资产共享服务与多端 IP 解析", test_lan_server_and_capture),
         ("3D 文字浮雕生成编译与审查修剪角色交替", test_text_relief_and_trim),
+        ("GUI 嵌入式 3D 交互视口与双模渲染切换", test_gui_embedded_viewport),
     ]
 
     all_ok = True

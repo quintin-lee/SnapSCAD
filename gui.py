@@ -27,8 +27,15 @@ from PyQt6.QtWidgets import (
     QFileDialog, QSplitter, QScrollArea, QTreeWidget, QTreeWidgetItem,
     QPlainTextEdit, QMessageBox, QProgressBar, QFrame, QSizePolicy,
     QListWidget, QListWidgetItem, QSpinBox, QDoubleSpinBox, QTabWidget,
-    QInputDialog,
+    QInputDialog, QStackedWidget,
 )
+
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    HAS_WEBENGINE = True
+except ImportError:
+    QWebEngineView = None
+    HAS_WEBENGINE = False
 
 from openscad_agent import AgentConfig, OpenscadAgent, OpenscadRenderer
 from openscad_agent.vision import AgnesVision, SpecParseError
@@ -172,6 +179,7 @@ class MainWindow(QMainWindow):
             "view_iso": "等轴测",
             "view_explode": "💥 爆炸图",
             "view_blueprint": "📐 蓝图",
+            "view_3d": "🎮 3D 交互视口",
             "btn_open_scad": "🚀 在 OpenSCAD 中打开 3D 模型",
             "btn_web_viewer": "🌐 网页 3D 查看器",
             "btn_gallery": "🏛️ 3D 展厅画廊",
@@ -204,6 +212,7 @@ class MainWindow(QMainWindow):
             "view_iso": "Isometric",
             "view_explode": "💥 Explode",
             "view_blueprint": "📐 Blueprint",
+            "view_3d": "🎮 3D Viewport",
             "btn_open_scad": "🚀 Open in OpenSCAD",
             "btn_web_viewer": "🌐 Web 3D Viewer",
             "btn_gallery": "🏛️ 3D Showcase Gallery",
@@ -256,6 +265,7 @@ class MainWindow(QMainWindow):
         self._last_image: Optional[str] = None
         self._last_desc: str = ""
         self._current_preview_png: Optional[str] = None
+        self._current_viewer_html: Optional[str] = None
         self._settings = QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
         self.setAcceptDrops(True)
         self._build_ui()
@@ -578,7 +588,13 @@ class MainWindow(QMainWindow):
         self.btn_view_iso = QPushButton("等轴测")
         self.btn_view_explode = QPushButton("💥 爆炸图")
         self.btn_view_blueprint = QPushButton("📐 蓝图")
-        for btn in (self.btn_view_persp, self.btn_view_top, self.btn_view_front, self.btn_view_iso, self.btn_view_explode, self.btn_view_blueprint):
+        self.btn_view_3d = QPushButton("🎮 3D 交互视口")
+        self.btn_view_3d.setStyleSheet("font-weight: bold;")
+        for btn in (
+            self.btn_view_persp, self.btn_view_top, self.btn_view_front,
+            self.btn_view_iso, self.btn_view_explode, self.btn_view_blueprint,
+            self.btn_view_3d,
+        ):
             btn.setFixedHeight(26)
             view_bar.addWidget(btn)
         view_bar.addStretch(1)
@@ -590,6 +606,7 @@ class MainWindow(QMainWindow):
         self.btn_view_iso.clicked.connect(lambda: self.on_switch_view("iso"))
         self.btn_view_explode.clicked.connect(lambda: self.on_switch_view("explode"))
         self.btn_view_blueprint.clicked.connect(lambda: self.on_switch_view("blueprint"))
+        self.btn_view_3d.clicked.connect(self.on_switch_to_3d_viewport)
 
         # 原图 | 预览图 并排
         cmp_split = QSplitter(Qt.Orientation.Horizontal)
@@ -606,7 +623,77 @@ class MainWindow(QMainWindow):
         self.lbl_preview.setMinimumSize(200, 260)
         self.lbl_preview.setStyleSheet("QLabel { border: 2px dashed #cbd5e1; border-radius: 8px; }")
         self.lbl_preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        cmp_split.addWidget(self.lbl_preview)
+
+        # 内嵌 3D 交互视口面板
+        self.widget_3d_viewport = QWidget()
+        lay_3d = QVBoxLayout(self.widget_3d_viewport)
+        lay_3d.setContentsMargins(0, 0, 0, 0)
+        lay_3d.setSpacing(4)
+
+        bar_3d = QHBoxLayout()
+        self.lbl_3d_title = QLabel("<b>🎮 3D 实时交互视口</b>")
+        bar_3d.addWidget(self.lbl_3d_title)
+        bar_3d.addStretch(1)
+
+        self.btn_reload_3d = QPushButton("🔄 刷新")
+        self.btn_reload_3d.setToolTip("重新载入当前 3D 场景")
+        self.btn_reload_3d.setFixedHeight(24)
+        self.btn_reload_3d.clicked.connect(self._reload_3d_viewer)
+        bar_3d.addWidget(self.btn_reload_3d)
+
+        self.btn_pop_browser = QPushButton("🌐 外部浏览器打开")
+        self.btn_pop_browser.setToolTip("在系统默认浏览器中独立打开 3D 查看器")
+        self.btn_pop_browser.setFixedHeight(24)
+        self.btn_pop_browser.clicked.connect(self.on_open_web_viewer)
+        bar_3d.addWidget(self.btn_pop_browser)
+        lay_3d.addLayout(bar_3d)
+
+        if HAS_WEBENGINE and QWebEngineView is not None:
+            self.web_view_3d = QWebEngineView()
+            self.web_view_3d.setStyleSheet("border: 2px solid #2563eb; border-radius: 8px;")
+            self.web_view_3d.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            lay_3d.addWidget(self.web_view_3d)
+            self.widget_fallback_3d = None
+        else:
+            self.web_view_3d = None
+            self.widget_fallback_3d = QFrame()
+            self.widget_fallback_3d.setStyleSheet(
+                "QFrame { background-color: #0f172a; border: 2px dashed #334155; border-radius: 8px; color: #f8fafc; padding: 20px; }"
+            )
+            fb_lay = QVBoxLayout(self.widget_fallback_3d)
+            fb_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fb_lay.setSpacing(12)
+
+            icon_lbl = QLabel("<div style='font-size: 36px;'>🎮</div>")
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fb_lay.addWidget(icon_lbl)
+
+            info_lbl = QLabel(
+                "<b style='font-size: 14px; color: #38bdf8;'>内嵌 3D 交互视口已就绪</b><br><br>"
+                "<span style='color: #94a3b8; font-size: 12px; line-height: 1.6;'>"
+                "当前环境可通过下方按钮一键调起外部浏览器进行 360° 旋转检视；<br>"
+                "或安装 <code>pip install PyQt6-WebEngine</code> 激活原生内置视口。"
+                "</span>"
+            )
+            info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            info_lbl.setWordWrap(True)
+            fb_lay.addWidget(info_lbl)
+
+            btn_open_fb = QPushButton("🚀 在浏览器中打开 3D 查看器 (360° 旋转 / 剖切 / 测距)")
+            btn_open_fb.setFixedHeight(34)
+            btn_open_fb.setStyleSheet(
+                "QPushButton { background-color: #2563eb; color: white; font-weight: bold; border-radius: 6px; padding: 6px 16px; font-size: 12px; }"
+                "QPushButton:hover { background-color: #1d4ed8; }"
+            )
+            btn_open_fb.clicked.connect(self.on_open_web_viewer)
+            fb_lay.addWidget(btn_open_fb)
+            lay_3d.addWidget(self.widget_fallback_3d)
+
+        # 预览区堆叠控件：Index 0 为 2D 静态渲染，Index 1 为 3D 交互视口
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.addWidget(self.lbl_preview)
+        self.preview_stack.addWidget(self.widget_3d_viewport)
+        cmp_split.addWidget(self.preview_stack)
 
         cmp_split.setSizes([260, 260])
         lay.addWidget(cmp_split, stretch=2)
@@ -718,6 +805,7 @@ class MainWindow(QMainWindow):
         self.btn_view_iso.setText(d["view_iso"])
         self.btn_view_explode.setText(d["view_explode"])
         self.btn_view_blueprint.setText(d["view_blueprint"])
+        self.btn_view_3d.setText(d.get("view_3d", "🎮 3D 交互视口"))
         self.btn_open_scad.setText(d["btn_open_scad"])
         self.btn_open_web.setText(d["btn_web_viewer"])
         self.btn_gallery.setText(d["btn_gallery"])
@@ -987,6 +1075,10 @@ class MainWindow(QMainWindow):
         if result.preview_png and Path(result.preview_png).exists():
             self._current_preview_png = result.preview_png
             self._show_preview(result.preview_png, origin_image=self._last_image)
+        if getattr(result, "viewer_html", None) and Path(result.viewer_html).exists():
+            self._current_viewer_html = result.viewer_html
+            if self.preview_stack.currentIndex() == 1:
+                self._load_3d_viewer(result.viewer_html)
 
         if result.success:
             self.log("✅ 建模成功")
@@ -1087,6 +1179,8 @@ class MainWindow(QMainWindow):
 
     def on_switch_view(self, view_name: str) -> None:
         """切换预览视角显示（已渲染则秒切，未预渲染则即时生成）。"""
+        self.preview_stack.setCurrentIndex(0)
+        self._update_view_buttons_active(view_name)
         if not self._current_preview_png:
             self.log("提示: 尚未渲染预览图")
             return
@@ -1134,6 +1228,74 @@ class MainWindow(QMainWindow):
                 self.log(f"即时渲染视角异常: {e}")
 
         self.log(f"提示: 未找到 {view_name} 视角图")
+
+    def on_switch_to_3d_viewport(self) -> None:
+        """切换至内嵌 3D 实时交互视口。"""
+        self.preview_stack.setCurrentIndex(1)
+        self._update_view_buttons_active("3d")
+        html_p = self._find_current_viewer_html()
+        if html_p and html_p.exists():
+            self._load_3d_viewer(str(html_p))
+        else:
+            self.log("提示: 当前模型尚未生成 3D 网页查看器，完成建模后即可交互检视。")
+
+    def _find_current_viewer_html(self) -> Optional[Path]:
+        """查找当前模型对应的 _viewer.html 路径。"""
+        if self._current_viewer_html and Path(self._current_viewer_html).exists():
+            return Path(self._current_viewer_html)
+        if self._scad_path:
+            p = Path(self._scad_path)
+            html = p.with_name(f"{p.stem}_viewer.html")
+            if html.exists():
+                return html
+        if self._current_preview_png:
+            p = Path(self._current_preview_png)
+            stem_clean = p.stem.replace("_preview", "").replace("_v_perspective", "")
+            cand = p.with_name(f"{stem_clean}_viewer.html")
+            if cand.exists():
+                return cand
+        out_dir = Path(self.txt_outdir.text().strip() or "out")
+        viewers = sorted(out_dir.glob("*_viewer.html"))
+        if viewers:
+            return viewers[-1]
+        return None
+
+    def _load_3d_viewer(self, html_path: str) -> None:
+        """将指定 HTML 网页查看器载入内嵌 3D 视口。"""
+        p = Path(html_path)
+        if not p.exists():
+            return
+        self._current_viewer_html = str(p)
+        if HAS_WEBENGINE and self.web_view_3d is not None:
+            self.web_view_3d.setUrl(QUrl.fromLocalFile(str(p.resolve())))
+            self.log(f"🎮 已在内嵌 3D 视口中载入模型: {p.name}")
+        else:
+            self.log(f"🎮 3D 视口已就绪: {p.name}")
+
+    def _reload_3d_viewer(self) -> None:
+        """刷新当前 3D 视口场景。"""
+        html_p = self._find_current_viewer_html()
+        if html_p and html_p.exists():
+            self._load_3d_viewer(str(html_p))
+
+    def _update_view_buttons_active(self, active_view: str) -> None:
+        """更新视角按钮高亮状态。"""
+        btn_map = {
+            "perspective": self.btn_view_persp,
+            "top": self.btn_view_top,
+            "front": self.btn_view_front,
+            "iso": self.btn_view_iso,
+            "explode": self.btn_view_explode,
+            "blueprint": self.btn_view_blueprint,
+            "3d": self.btn_view_3d,
+        }
+        for k, btn in btn_map.items():
+            if k == active_view:
+                btn.setStyleSheet(
+                    "QPushButton { font-weight: bold; background-color: #2563eb; color: white; border-radius: 4px; }"
+                )
+            else:
+                btn.setStyleSheet("")
 
     def on_open_in_openscad(self) -> None:
         """后台拉起 OpenSCAD 检视当前 .scad 源码。"""
@@ -1560,6 +1722,14 @@ class MainWindow(QMainWindow):
         if prev_cand.exists():
             self._current_preview_png = str(prev_cand)
             self._show_preview(str(prev_cand), origin_image=None)
+
+        cand_html = out_dir / f"{name}_viewer.html"
+        if not cand_html.exists():
+            cand_html = out_dir / f"{sf.stem.replace('_spec','')}_viewer.html"
+        if cand_html.exists():
+            self._current_viewer_html = str(cand_html)
+            if self.preview_stack.currentIndex() == 1:
+                self._load_3d_viewer(str(cand_html))
 
         self.log(f"📚 已全景回溯载入历史工程: {name}")
 
