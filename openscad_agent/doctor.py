@@ -37,11 +37,38 @@ class PrintabilityReport:
         return f"适印性评分: {self.score}/100 ({status})"
 
 
-def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """计算单个部件的世界坐标 Axis-Aligned Bounding Box (AABB)。
+def _get_rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    """计算 OpenSCAD Euler 旋转矩阵 (Rz * Ry * Rx)。
 
-    polyhedron 部件: 从 points/faces 顶点坐标直接计算精确包围盒;
-    无有效顶点时回退 10×10×10 立方体估算, 不再返回 False 跳过。
+    OpenSCAD rotate([rx, ry, rz]) 依次按 X 轴、Y 轴、Z 轴顺序旋转。
+    """
+    a = math.radians(rx_deg)
+    b = math.radians(ry_deg)
+    c = math.radians(rz_deg)
+    ca, sa = math.cos(a), math.sin(a)
+    cb, sb = math.cos(b), math.sin(b)
+    cc, sc = math.cos(c), math.sin(c)
+    return (
+        (cc * cb, cc * sb * sa - sc * ca, cc * sb * ca + sc * sa),
+        (sc * cb, sc * sb * sa + cc * ca, sc * sb * ca - cc * sa),
+        (-sb, cb * sa, cb * ca),
+    )
+
+
+def _apply_rotation(r: tuple[tuple[float, float, float], ...], v: tuple[float, float, float]) -> tuple[float, float, float]:
+    """计算 3x3 旋转矩阵作用于 3D 向量。"""
+    return (
+        r[0][0] * v[0] + r[0][1] * v[1] + r[0][2] * v[2],
+        r[1][0] * v[0] + r[1][1] * v[1] + r[1][2] * v[2],
+        r[2][0] * v[0] + r[2][1] * v[1] + r[2][2] * v[2],
+    )
+
+
+def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """计算单个部件在世界坐标下的 Axis-Aligned Bounding Box (AABB)。
+
+    采用精确 3D Euler 旋转矩阵 (Rz * Ry * Rx)，对旋转倾斜物体计算闭式解析或顶点映射包围盒。
+    返回 ((min_x, min_y, min_z), (max_x, max_y, max_z))。
     """
     prim = str(p.get("primitive", "cube")).lower()
     size = normalize_size(prim, p)
@@ -50,20 +77,114 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
     cy = float(center[1]) if len(center) >= 2 else 0.0
     cz = float(center[2]) if len(center) >= 3 else 0.0
 
+    rot = p.get("rotation") or [0, 0, 0]
+    rx = float(rot[0]) if len(rot) >= 1 else 0.0
+    ry = float(rot[1]) if len(rot) >= 2 else 0.0
+    rz = float(rot[2]) if len(rot) >= 3 else 0.0
+    has_rot = any(abs(v) > 1e-4 for v in (rx, ry, rz))
+
     if prim in ("cube", "cuboid", "box"):
         w, d, h = size[0], size[1], size[2]
-        return ((cx - w / 2, cy - d / 2, cz), (cx + w / 2, cy + d / 2, cz + h))
-    elif prim in ("cylinder", "capsule"):
-        d = size[0]
-        h = size[2] if len(size) >= 3 else (size[1] if len(size) >= 2 else 10.0)
-        r = d / 2.0
-        return ((cx - r, cy - r, cz), (cx + r, cy + r, cz + h))
+        if not has_rot:
+            return ((cx - w / 2, cy - d / 2, cz), (cx + w / 2, cy + d / 2, cz + h))
+        R = _get_rotation_matrix(rx, ry, rz)
+        # 8 个局部顶点: x in [-w/2, w/2], y in [-d/2, d/2], z in [0, h]
+        corners = [
+            (sx * w / 2.0, sy * d / 2.0, sz * h)
+            for sx in (-1.0, 1.0)
+            for sy in (-1.0, 1.0)
+            for sz in (0.0, 1.0)
+        ]
+        pts = [
+            (cx + rv[0], cy + rv[1], cz + rv[2])
+            for rv in (_apply_rotation(R, c) for c in corners)
+        ]
+        return (
+            (min(p[0] for p in pts), min(p[1] for p in pts), min(p[2] for p in pts)),
+            (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts)),
+        )
+
+    elif prim == "cylinder":
+        if len(size) >= 3:
+            d1, d2, h = float(size[0]), float(size[1]), float(size[2])
+        else:
+            d1 = d2 = float(size[0])
+            h = float(size[1]) if len(size) >= 2 else 10.0
+        r1, r2 = d1 / 2.0, d2 / 2.0
+
+        if not has_rot:
+            max_r = max(r1, r2)
+            return ((cx - max_r, cy - max_r, cz), (cx + max_r, cy + max_r, cz + h))
+
+        R = _get_rotation_matrix(rx, ry, rz)
+        top_center = (h * R[0][2], h * R[1][2], h * R[2][2])
+        mins: list[float] = []
+        maxs: list[float] = []
+        for k in range(3):
+            proj_scale = math.sqrt(R[k][0] ** 2 + R[k][1] ** 2)
+            b_min, b_max = -r1 * proj_scale, r1 * proj_scale
+            t_min, t_max = top_center[k] - r2 * proj_scale, top_center[k] + r2 * proj_scale
+            c_k = cx if k == 0 else (cy if k == 1 else cz)
+            mins.append(c_k + min(b_min, t_min))
+            maxs.append(c_k + max(b_max, t_max))
+        return ((mins[0], mins[1], mins[2]), (maxs[0], maxs[1], maxs[2]))
+
+    elif prim == "capsule":
+        r = float(size[0]) if size else 5.0
+        h = float(size[1]) if len(size) >= 2 else 20.0
+        span = max(h - 2 * r, 0.0)
+
+        if not has_rot:
+            return ((cx - r, cy - r, cz), (cx + r, cy + r, cz + h))
+
+        R = _get_rotation_matrix(rx, ry, rz)
+        v1 = _apply_rotation(R, (0.0, 0.0, r))
+        v2 = _apply_rotation(R, (0.0, 0.0, r + span))
+        mins = [
+            (cx if k == 0 else (cy if k == 1 else cz)) + min(v1[k], v2[k]) - r
+            for k in range(3)
+        ]
+        maxs = [
+            (cx if k == 0 else (cy if k == 1 else cz)) + max(v1[k], v2[k]) + r
+            for k in range(3)
+        ]
+        return ((mins[0], mins[1], mins[2]), (maxs[0], maxs[1], maxs[2]))
+
     elif prim == "sphere":
-        r = size[0] if size else 5.0
+        r = float(size[0]) if size else 5.0
         return ((cx - r, cy - r, cz - r), (cx + r, cy + r, cz + r))
+
+    elif prim in ("linear_extrude", "rotate_extrude", "text"):
+        h = float(p.get("height", 10.0))
+        poly = p.get("polygon")
+        if poly and len(poly) >= 3:
+            pts2d = [(float(pt[0]), float(pt[1])) for pt in poly]
+        else:
+            pts2d = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+
+        if not has_rot:
+            min_x_p = min(pt[0] for pt in pts2d)
+            max_x_p = max(pt[0] for pt in pts2d)
+            min_y_p = min(pt[1] for pt in pts2d)
+            max_y_p = max(pt[1] for pt in pts2d)
+            return ((cx + min_x_p, cy + min_y_p, cz), (cx + max_x_p, cy + max_y_p, cz + h))
+
+        R = _get_rotation_matrix(rx, ry, rz)
+        pts3d: list[tuple[float, float, float]] = []
+        for pt in pts2d:
+            pts3d.append((pt[0], pt[1], 0.0))
+            pts3d.append((pt[0], pt[1], h))
+        world_pts = [
+            (cx + rv[0], cy + rv[1], cz + rv[2])
+            for rv in (_apply_rotation(R, v) for v in pts3d)
+        ]
+        return (
+            (min(pt[0] for pt in world_pts), min(pt[1] for pt in world_pts), min(pt[2] for pt in world_pts)),
+            (max(pt[0] for pt in world_pts), max(pt[1] for pt in world_pts), max(pt[2] for pt in world_pts)),
+        )
+
     elif prim == "polyhedron":
-        # 优先从 LLM 提供的顶点坐标计算精确 AABB
-        points = p.get("points") or p.get("polygon") or []
+        points = p.get("points") or p.get("vertices") or p.get("polygon") or []
         valid: list[tuple[float, float, float]] = []
         for pt in points:
             if isinstance(pt, (list, tuple)) and len(pt) >= 3:
@@ -71,17 +192,34 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
                     valid.append((float(pt[0]), float(pt[1]), float(pt[2])))
                 except (TypeError, ValueError):
                     pass
-        if len(valid) >= 4:  # 至少 4 个有效顶点才有意义
-            min_x = min(v[0] for v in valid)
-            max_x = max(v[0] for v in valid)
-            min_y = min(v[1] for v in valid)
-            max_y = max(v[1] for v in valid)
-            min_z = min(v[2] for v in valid)
-            max_z = max(v[2] for v in valid)
-            return ((min_x, min_y, min_z), (max_x, max_y, max_z))
+        if len(valid) >= 4:
+            max_abs = max((abs(c) for v in valid for c in v), default=0.0)
+            is_local = max_abs <= 2.0
+            if has_rot:
+                R = _get_rotation_matrix(rx, ry, rz)
+                world_pts = []
+                for v in valid:
+                    loc_v = v if is_local else (v[0] - cx, v[1] - cy, v[2] - cz)
+                    rv = _apply_rotation(R, loc_v)
+                    world_pts.append((cx + rv[0], cy + rv[1], cz + rv[2]))
+                return (
+                    (min(pt[0] for pt in world_pts), min(pt[1] for pt in world_pts), min(pt[2] for pt in world_pts)),
+                    (max(pt[0] for pt in world_pts), max(pt[1] for pt in world_pts), max(pt[2] for pt in world_pts)),
+                )
+            else:
+                if is_local:
+                    valid = [(cx + v[0], cy + v[1], cz + v[2]) for v in valid]
+                return (
+                    (min(v[0] for v in valid), min(v[1] for v in valid), min(v[2] for v in valid)),
+                    (max(v[0] for v in valid), max(v[1] for v in valid), max(v[2] for v in valid)),
+                )
         return ((cx - 10, cy - 10, cz), (cx + 10, cy + 10, cz + 10))
+
     else:
         return ((cx - 10, cy - 10, cz), (cx + 10, cy + 10, cz + 10))
+
+
+get_part_aabb = _get_part_aabb
 
 
 def check_assembly_interference(parts: list[dict[str, Any]]) -> list[tuple[str, str, str, float]]:
@@ -188,18 +326,10 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
             elif min_dim < 0.8:
                 report.warnings.append(f"部件 '{pid}' 特征壁厚偏薄 ({min_dim:.2f}mm)，单圈走丝强度较脆弱")
                 report.score -= 8
-            # 更新包围盒
-            min_x = min(min_x, cx - w / 2)
-            max_x = max(max_x, cx + w / 2)
-            min_y = min(min_y, cy - d / 2)
-            max_y = max(max_y, cy + d / 2)
-            min_z = min(min_z, cz)
-            max_z = max(max_z, cz + h)
 
         elif prim in ("cylinder", "capsule"):
             d = size[0]
             h = size[2] if len(size) >= 3 else (size[1] if len(size) >= 2 else 10.0)
-            r = d / 2.0
             if d < 0.8:
                 report.warnings.append(f"部件 '{pid}' 直径过小 ({d:.2f}mm)，打印易折断")
                 report.score -= 15
@@ -207,25 +337,21 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
                 report.warnings.append(f"部件 '{pid}' 高径比过大 ({h/d:.1f})，细长立柱在高速移动时易晃动拉丝")
                 report.tips.append(f"针对部件 '{pid}' 建议切片时开启外侧支撑或大底裙边 (Brim)")
                 report.score -= 5
-            # 更新包围盒
-            min_x = min(min_x, cx - r)
-            max_x = max(max_x, cx + r)
-            min_y = min(min_y, cy - r)
-            max_y = max(max_y, cy + r)
-            min_z = min(min_z, cz)
-            max_z = max(max_z, cz + h)
 
         elif prim == "sphere":
             r = size[0]
             if r < 1.0:
                 report.warnings.append(f"球体 '{pid}' 半径极小 ({r:.2f}mm)")
                 report.score -= 10
-            min_x = min(min_x, cx - r)
-            max_x = max(max_x, cx + r)
-            min_y = min(min_y, cy - r)
-            max_y = max(max_y, cy + r)
-            min_z = min(min_z, cz - r)
-            max_z = max(max_z, cz + r)
+
+        # 统一由精确 3D Euler AABB 更新全模型外轮廓包围盒
+        part_min, part_max = _get_part_aabb(p)
+        min_x = min(min_x, part_min[0])
+        max_x = max(max_x, part_max[0])
+        min_y = min(min_y, part_min[1])
+        max_y = max(max_y, part_max[1])
+        min_z = min(min_z, part_min[2])
+        max_z = max(max_z, part_max[2])
 
         # 孔洞检查
         holes = p.get("holes") or []
@@ -345,4 +471,4 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     return out_path
 
 
-__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference"]
+__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb"]

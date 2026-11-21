@@ -310,6 +310,45 @@ def test_chamfer_features():
     assert ok, f"倒角模型编译失败: {msg}"
 
 
+def test_exact_rotation_aabb_grounding():
+    """测试 14: 精确 3D Euler 旋转 AABB 计算与 Z=0 物理接地贴合"""
+    from openscad_agent.doctor import get_part_aabb
+    from openscad_agent.geometry import spec_to_scad
+
+    # 1. 倾斜 90 度的立柱 (沿 Y 轴旋转 90 度): d=10, h=30, 原点 [0,0,0]
+    cyl = {
+        "id": "tilted_cyl",
+        "primitive": "cylinder",
+        "size": [10, 30],
+        "rotation": [0, 90, 0],
+        "center": [0, 0, 0]
+    }
+    aabb_cyl = get_part_aabb(cyl)
+    assert abs(aabb_cyl[0][2] - (-5.0)) < 1e-3, f"最低点 Z 期望 -5.0, 实际 {aabb_cyl[0][2]}"
+    assert abs(aabb_cyl[1][2] - 5.0) < 1e-3, f"最高点 Z 期望 5.0, 实际 {aabb_cyl[1][2]}"
+
+    # 2. 绕 X 轴旋转 90 度的立方体: w=20, d=10, h=40, 原点 [0,0,0]
+    box = {
+        "id": "tilted_box",
+        "primitive": "cube",
+        "size": [20, 10, 40],
+        "rotation": [90, 0, 0],
+        "center": [0, 0, 0]
+    }
+    aabb_box = get_part_aabb(box)
+    assert abs(aabb_box[0][2] - (-5.0)) < 1e-3, f"最低点 Z 期望 -5.0, 实际 {aabb_box[0][2]}"
+    assert abs(aabb_box[1][2] - 5.0) < 1e-3, f"最高点 Z 期望 5.0, 实际 {aabb_box[1][2]}"
+
+    # 3. 验证 spec_to_scad 自动接地贴合计算注入
+    spec = {
+        "name": "grounding_test",
+        "parts": [cyl],
+        "assembly": {"union_parts": ["tilted_cyl"]}
+    }
+    sc_text = spec_to_scad(spec, ground_z=True)
+    assert "translate([0, 0, 5])" in sc_text
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -322,6 +361,7 @@ def run_all_tests() -> bool:
         ("几何转译与真实 OpenSCAD CGAL 编译", test_geometry_and_compilation),
         ("CSG 树层级与布尔装配 (交集/差集/并集)", test_csg_assembly),
         ("45度棱边倒角与立柱导入角 (chamfer)", test_chamfer_features),
+        ("精确 3D Euler 旋转 AABB 与 Z=0 物理接地", test_exact_rotation_aabb_grounding),
         ("多格式渲染矩阵 (binstl/3mf/dxf/svg/png)", test_multi_formats_export),
         ("3D 打印体检系统与切片指导书生成", test_doctor_and_guide),
         ("独立 HTML 3D 查看器与全景展厅画廊", test_viewer_and_gallery),
