@@ -601,11 +601,14 @@ def spec_to_scad(
 
     # 装配
     out.append("// ---------------- 装配 ----------------")
-    union_ids: list[str] = assembly.get("union_parts") or [
-        p.get("id", p.get("primitive")) for p in parts
-    ]
+    union_ids: list[str] = assembly.get("union_parts") or []
+    intersection_ids: list[str] = assembly.get("intersection_parts") or []
+    difference_ids: list[str] = assembly.get("difference_parts") or []
     difference_from = assembly.get("difference_from")
-    out.append(f"// assembly: {assembly.get('description', 'union of parts')}")
+    if not union_ids and not intersection_ids:
+        union_ids = [p.get("id", p.get("primitive")) for p in parts]
+
+    out.append(f"// assembly: {assembly.get('description', 'CSG assembly of parts')}")
 
     # 计算各部件几何中心作为装配体展开基准 (Exploded View Vector)
     part_map = {_sanitize_module_name(p.get("id", ""), fallback="part"): p for p in parts}
@@ -622,13 +625,10 @@ def spec_to_scad(
     out.append("explode = 0.0; // [0:0.1:3]")
     out.append("")
 
-    # 顶层: union 所有部件 (支持爆炸图展开)
-    out.append(f"module {safe_name}() {{")
-    out.append("  union() {")
-    for idx, pid in enumerate(union_ids):
+    def _render_part_call(pid: str, idx: int, total_count: int, indent: str = "    ") -> str:
         pid_safe = _sanitize_module_name(pid, fallback="part")
         p_obj = part_map.get(pid_safe)
-        if p_obj and len(union_ids) > 1:
+        if p_obj and total_count > 1:
             p_center = p_obj.get("center", [0, 0, 0])
             pcx = float(p_center[0]) if len(p_center) >= 1 else 0.0
             pcy = float(p_center[1]) if len(p_center) >= 2 else 0.0
@@ -637,34 +637,69 @@ def spec_to_scad(
             dy = pcy - avg_cy
             dz = pcz - avg_cz
             if abs(dx) < 1e-3 and abs(dy) < 1e-3 and abs(dz) < 1e-3:
-                dz = (idx - (len(union_ids) - 1) / 2.0) * 20.0
-            out.append(f"    translate(explode * [{_fmt(dx)}, {_fmt(dy)}, {_fmt(dz)}])")
-            out.append(f"      {pid_safe}();")
+                dz = (idx - (total_count - 1) / 2.0) * 20.0
+            return f"{indent}translate(explode * [{_fmt(dx)}, {_fmt(dy)}, {_fmt(dz)}])\n{indent}  {pid_safe}();"
+        return f"{indent}{pid_safe}();"
+
+    # 顶层模型模块
+    out.append(f"module {safe_name}() {{")
+
+    # 是否存在减除部分 (difference_parts 或 difference_from)
+    has_subtraction = bool(difference_ids or difference_from)
+    top_indent = "  " if not has_subtraction else "    "
+
+    if has_subtraction:
+        out.append("  difference() {")
+
+    # 构建主体正向几何 (positive geometry)
+    if difference_from:
+        base_safe = _sanitize_module_name(difference_from, fallback="part")
+        out.append(f"{top_indent}// 基准部件 (Base Part)")
+        out.append(f"{top_indent}{base_safe}();")
+    else:
+        both_ops = bool(union_ids and intersection_ids)
+        if both_ops or len(union_ids) > 1:
+            out.append(f"{top_indent}union() {{")
+            for idx, pid in enumerate(union_ids):
+                out.append(_render_part_call(pid, idx, len(union_ids), indent=top_indent + "  "))
+            if intersection_ids:
+                out.append(f"{top_indent}  intersection() {{")
+                for idx, pid in enumerate(intersection_ids):
+                    out.append(_render_part_call(pid, idx, len(intersection_ids), indent=top_indent + "    "))
+                out.append(f"{top_indent}  }}")
+            out.append(f"{top_indent}}}")
+        elif intersection_ids and not union_ids:
+            out.append(f"{top_indent}intersection() {{")
+            for idx, pid in enumerate(intersection_ids):
+                out.append(_render_part_call(pid, idx, len(intersection_ids), indent=top_indent + "  "))
+            out.append(f"{top_indent}}}")
+        elif union_ids:
+            for idx, pid in enumerate(union_ids):
+                out.append(_render_part_call(pid, idx, len(union_ids), indent=top_indent))
         else:
-            out.append(f"    {pid_safe}();")
-    out.append("  }")
+            out.append(f"{top_indent}// empty assembly")
+
+    # 构建减除负向几何 (negative geometry)
+    if has_subtraction:
+        if difference_from and not difference_ids:
+            subtract_ids = [p for p in union_ids if str(p) != str(difference_from)]
+        else:
+            subtract_ids = difference_ids
+
+        out.append("    // 减除部件 (Subtracted Parts)")
+        if len(subtract_ids) > 1:
+            out.append("    union() {")
+            for idx, pid in enumerate(subtract_ids):
+                out.append(_render_part_call(pid, idx, len(subtract_ids), indent="      "))
+            out.append("    }")
+        elif subtract_ids:
+            out.append(_render_part_call(subtract_ids[0], 0, 1, indent="    "))
+        out.append("  }")
+
     out.append("}")
     out.append("")
 
-    # 若有全局挖除基准，生成 final 模块
-    if difference_from:
-        base = str(difference_from)
-        others = [p for p in union_ids if p != base]
-        if others:
-            out.append(f"module {safe_name}_final() {{")
-            out.append(f"  difference() {{")
-            out.append(f"    {_sanitize_module_name(base, fallback='part')}();")
-            out.append("    union() {")
-            for o in others:
-                out.append(f"      {_sanitize_module_name(o, fallback='part')}();")
-            out.append("    }")
-            out.append("  }")
-            out.append("}")
-            final_module = f"{safe_name}_final"
-        else:
-            final_module = safe_name
-    else:
-        final_module = safe_name
+    final_module = safe_name
 
     # 自动接地贴合计算 (Z=0)
     all_min_z = min((_estimate_part_min_z(p) for p in parts), default=0.0) if ground_z else 0.0

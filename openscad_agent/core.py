@@ -588,9 +588,10 @@ SPEC_SCHEMA = """\
   ],
   "assembly": {
     "description": "string, 装配关系说明",
-    "union_parts": ["id", ...],              // 需要 union 的部件 id
-    "intersection_parts": ["id", ...],       // 可选，需要做求交集的部件 id
-    "difference_from": "string|id, 基准部件 id（可选, 表示 parts 中其余为挖除项）"
+    "union_parts": ["id", ...],              // 需要并集 (union) 的部件 id
+    "intersection_parts": ["id", ...],       // 可选，需要求交集 (intersection) 的部件 id
+    "difference_parts": ["id", ...],         // 可选，从装配体中减除 (difference) 的部件 id
+    "difference_from": "string|id, 基准部件 id（可选, 表示从该基准部件中挖除其余部件）"
   },
   "print_tips": ["string", ...]               // 3D 打印建议（可选）
 }

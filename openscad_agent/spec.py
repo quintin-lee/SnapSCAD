@@ -383,22 +383,57 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(assembly, dict):
         assembly = {}
     all_ids = [str(p.get("id")) for p in out["parts"]]
+
+    # intersection_parts 校验
+    intersect = assembly.get("intersection_parts")
+    if isinstance(intersect, list) and intersect:
+        valid_i = [u for u in intersect if str(u) in set(all_ids)]
+        dropped_i = [u for u in intersect if str(u) not in set(all_ids)]
+        if dropped_i:
+            issues.append(f"assembly.intersection_parts 含未知 id {dropped_i}，已忽略")
+        assembly["intersection_parts"] = valid_i
+    else:
+        intersect = None
+
+    # difference_parts 校验 (需从装配主体中挖除的部件)
+    diff = assembly.get("difference_parts")
+    if isinstance(diff, list) and diff:
+        valid_d = [u for u in diff if str(u) in set(all_ids)]
+        dropped_d = [u for u in diff if str(u) not in set(all_ids)]
+        if dropped_d:
+            issues.append(f"assembly.difference_parts 含未知 id {dropped_d}，已忽略")
+        assembly["difference_parts"] = valid_d
+    else:
+        diff = None
+
+    # difference_from 基准部件校验
+    diff_from = assembly.get("difference_from")
+    if diff_from:
+        diff_from_str = str(diff_from)
+        if diff_from_str not in set(all_ids):
+            issues.append(f"assembly.difference_from 指向未知 id '{diff_from_str}'，已忽略")
+            assembly.pop("difference_from", None)
+        else:
+            assembly["difference_from"] = diff_from_str
+
     union = assembly.get("union_parts")
     if not isinstance(union, list) or not union:
-        assembly["union_parts"] = all_ids
+        # 若未指定 union_parts，默认排除单独作为挖除项的 difference_parts
+        diff_set = set(assembly.get("difference_parts") or [])
+        if intersect and not [pid for pid in all_ids if pid not in intersect and pid not in diff_set]:
+            assembly["union_parts"] = []
+        else:
+            assembly["union_parts"] = [pid for pid in all_ids if pid not in diff_set and pid not in (intersect or [])]
+            if not assembly["union_parts"] and not intersect:
+                assembly["union_parts"] = all_ids
     else:
         # 只保留存在于 parts 的 id
         valid = [u for u in union if str(u) in set(all_ids)]
         dropped = [u for u in union if str(u) not in set(all_ids)]
         if dropped:
             issues.append(f"assembly.union_parts 含未知 id {dropped}，已忽略")
-        assembly["union_parts"] = valid or all_ids
+        assembly["union_parts"] = valid
 
-    # intersection_parts 校验
-    intersect = assembly.get("intersection_parts")
-    if isinstance(intersect, list) and intersect:
-        valid_i = [u for u in intersect if str(u) in set(all_ids)]
-        assembly["intersection_parts"] = valid_i
     out["assembly"] = assembly
 
     return out, issues

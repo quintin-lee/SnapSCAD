@@ -216,6 +216,41 @@ def test_text_relief_and_trim():
         assert hist[i]["role"] != hist[i-1]["role"], f"审查修剪角色交替违规 @idx {i}: {[(h['role']) for h in hist]}"
 
 
+def test_csg_assembly():
+    """测试 12: CSG 树层级与布尔运算装配 (union, intersection, difference)"""
+    spec = {
+        "name": "test_csg_model",
+        "parts": [
+            {"id": "base_box", "primitive": "cube", "size": [40, 40, 20], "center": [0, 0, 0]},
+            {"id": "cut_cyl", "primitive": "cylinder", "size": [15, 30], "center": [0, 0, 0]},
+            {"id": "cut_sphere", "primitive": "sphere", "size": [12], "center": [0, 0, 10]},
+            {"id": "lens_a", "primitive": "sphere", "size": [20], "center": [-5, 0, 0]},
+            {"id": "lens_b", "primitive": "sphere", "size": [20], "center": [5, 0, 0]},
+        ],
+        "assembly": {
+            "description": "Base box with intersection lens and subtracted holes",
+            "union_parts": ["base_box"],
+            "intersection_parts": ["lens_a", "lens_b"],
+            "difference_parts": ["cut_cyl", "cut_sphere"],
+        }
+    }
+    norm_spec, issues = validate_spec(spec)
+    assert "lens_a" in norm_spec["assembly"]["intersection_parts"]
+    assert "cut_cyl" in norm_spec["assembly"]["difference_parts"]
+    assert "base_box" in norm_spec["assembly"]["union_parts"]
+
+    cfg = AgentConfig(output_dir="out_test")
+    sp, sc, safe = write_spec_and_scad(norm_spec, cfg)
+    sc_text = Path(sc).read_text(encoding="utf-8")
+    assert "intersection()" in sc_text
+    assert "difference()" in sc_text
+    assert "union()" in sc_text
+
+    r = OpenscadRenderer(cfg)
+    ok, msg = r.validate(Path(sc))
+    assert ok, f"CSG 装配编译失败: {msg}"
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -226,6 +261,7 @@ def run_all_tests() -> bool:
         ("全量 Python 代码 AST 语法解析", test_ast_syntax),
         ("规格规范化、多单位换算与紧固件解析", test_spec_and_units),
         ("几何转译与真实 OpenSCAD CGAL 编译", test_geometry_and_compilation),
+        ("CSG 树层级与布尔装配 (交集/差集/并集)", test_csg_assembly),
         ("多格式渲染矩阵 (binstl/3mf/dxf/svg/png)", test_multi_formats_export),
         ("3D 打印体检系统与切片指导书生成", test_doctor_and_guide),
         ("独立 HTML 3D 查看器与全景展厅画廊", test_viewer_and_gallery),
