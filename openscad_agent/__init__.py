@@ -11,7 +11,7 @@ from .vision import AgnesVision, SpecParseError
 from .geometry import spec_to_scad, write_spec_and_scad
 from .log import setup_logging, get_logger
 from .spec import validate_spec, normalize_part
-from .doctor import check_printability, PrintabilityReport, generate_print_guide
+from .doctor import check_printability, PrintabilityReport, generate_print_guide, MATERIAL_PROFILES
 from .gallery import generate_gallery
 from .packager import package_project
 from .server import serve_assets, stop_server, is_port_in_use
@@ -36,6 +36,7 @@ __all__ = [
     "check_printability",
     "PrintabilityReport",
     "generate_print_guide",
+    "MATERIAL_PROFILES",
     "generate_gallery",
     "package_project",
     "upload_to_3d_printer",

@@ -349,6 +349,46 @@ def test_exact_rotation_aabb_grounding():
     assert "translate([0, 0, 5])" in sc_text
 
 
+def test_material_profiles():
+    """测试 15: 多耗材材质物性推导 (PLA/PETG/ABS/TPU/PC) 与针对性切片工艺指导"""
+    from openscad_agent.doctor import check_printability, generate_print_guide, MATERIAL_PROFILES
+
+    spec = {
+        "name": "mat_test_model",
+        "parts": [{"id": "body", "primitive": "cube", "size": [40, 40, 20], "center": [0, 0, 0]}],
+        "assembly": {"union_parts": ["body"]}
+    }
+
+    # PLA 标准检查
+    rep_pla = check_printability(spec, material="PLA")
+    assert rep_pla.material == "PLA"
+    assert rep_pla.shrinkage_pct == 0.3
+    assert rep_pla.weight_g > 0
+
+    # ABS 高温高收缩检查
+    rep_abs = check_printability(spec, material="ABS")
+    assert rep_abs.material == "ABS"
+    assert rep_abs.shrinkage_pct == 1.5
+    # ABS 密度 1.04 比 PLA 1.24 小，相同体积克重更轻
+    assert rep_abs.weight_g < rep_pla.weight_g
+    assert any("保温箱" in tip for tip in rep_abs.tips)
+
+    # TPU 弹性软胶慢速打印检查
+    rep_tpu = check_printability(spec, material="TPU")
+    assert rep_tpu.material == "TPU"
+    assert any("回抽" in tip for tip in rep_tpu.tips)
+    # TPU 速度降低 50%，预估耗时更长
+    assert rep_tpu.print_time_hours > rep_pla.print_time_hours
+
+    # 导出指导书并验证包含材质特定参数
+    guide_path = Path("out_test/mat_test_guide.md")
+    generate_print_guide(spec, rep_abs, guide_path)
+    guide_content = guide_path.read_text(encoding="utf-8")
+    assert "ABS" in guide_content
+    assert "保温箱" in guide_content
+    assert "250°C" in guide_content
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -364,6 +404,7 @@ def run_all_tests() -> bool:
         ("精确 3D Euler 旋转 AABB 与 Z=0 物理接地", test_exact_rotation_aabb_grounding),
         ("多格式渲染矩阵 (binstl/3mf/dxf/svg/png)", test_multi_formats_export),
         ("3D 打印体检系统与切片指导书生成", test_doctor_and_guide),
+        ("多材质物性推导与切片工艺指导 (PLA/ABS/TPU)", test_material_profiles),
         ("独立 HTML 3D 查看器与全景展厅画廊", test_viewer_and_gallery),
         ("All-in-One 全套工程资产 ZIP 打包", test_packager),
         ("本地离线端点识别与免 Key 认证网关", test_offline_gateway),

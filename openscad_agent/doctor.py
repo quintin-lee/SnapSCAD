@@ -31,10 +31,76 @@ class PrintabilityReport:
     print_time_hours: float = 0.0
     cost_cny: float = 0.0
     cost_usd: float = 0.0
+    material: str = "PLA"
+    shrinkage_pct: float = 0.3
 
     def summary(self) -> str:
         status = "✅ 优良" if self.score >= 90 else ("⚠️ 需注意" if self.score >= 70 else "❌ 风险较高")
         return f"适印性评分: {self.score}/100 ({status})"
+
+
+MATERIAL_PROFILES: dict[str, dict[str, Any]] = {
+    "PLA": {
+        "name": "PLA (聚乳酸)",
+        "density": 1.24,             # g/cm³
+        "shrinkage_pct": 0.3,         # % 收缩率
+        "nozzle_temp": "205-220°C (推荐 210°C)",
+        "bed_temp": "55-65°C (推荐 60°C)",
+        "fan_speed": "100%",
+        "cost_per_kg_cny": 80.0,
+        "cost_per_kg_usd": 20.0,
+        "enclosure_required": False,
+        "features": "收缩率极低、尺寸稳定性高、极易打印、适合原型与结构件",
+    },
+    "PETG": {
+        "name": "PETG (改性聚对苯二甲酸乙二醇酯)",
+        "density": 1.27,
+        "shrinkage_pct": 0.5,
+        "nozzle_temp": "230-250°C (推荐 240°C)",
+        "bed_temp": "75-85°C (推荐 80°C)",
+        "fan_speed": "30-50%",
+        "cost_per_kg_cny": 90.0,
+        "cost_per_kg_usd": 22.0,
+        "enclosure_required": False,
+        "features": "高韧性、耐候耐冲击、耐温达 75°C，易轻微拉丝",
+    },
+    "ABS": {
+        "name": "ABS (丙烯腈-丁二烯-苯乙烯共聚物)",
+        "density": 1.04,
+        "shrinkage_pct": 1.5,
+        "nozzle_temp": "245-265°C (推荐 250°C)",
+        "bed_temp": "95-110°C (推荐 100°C)",
+        "fan_speed": "0-20%",
+        "cost_per_kg_cny": 95.0,
+        "cost_per_kg_usd": 24.0,
+        "enclosure_required": True,
+        "features": "耐冲击、耐温达 100°C、易打磨，收缩率较高必须封箱保温防翘边",
+    },
+    "TPU": {
+        "name": "TPU (热塑性聚氨酯弹性体 95A)",
+        "density": 1.21,
+        "shrinkage_pct": 0.8,
+        "nozzle_temp": "215-235°C (推荐 225°C)",
+        "bed_temp": "35-50°C (推荐 45°C)",
+        "fan_speed": "80-100%",
+        "cost_per_kg_cny": 120.0,
+        "cost_per_kg_usd": 30.0,
+        "enclosure_required": False,
+        "features": "高弹性、抗撕裂耐磨，建议近端挤出机、打印速度降至 25-35mm/s",
+    },
+    "PC": {
+        "name": "PC (聚碳酸酯)",
+        "density": 1.20,
+        "shrinkage_pct": 1.6,
+        "nozzle_temp": "260-290°C (推荐 275°C)",
+        "bed_temp": "105-120°C (推荐 110°C)",
+        "fan_speed": "0%",
+        "cost_per_kg_cny": 180.0,
+        "cost_per_kg_usd": 45.0,
+        "enclosure_required": True,
+        "features": "超高强度刚性、耐温达 115°C，高热应力需高温封箱保温与特种附着胶",
+    },
+}
 
 
 def _get_rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
@@ -292,13 +358,22 @@ def _estimate_primitive_volume_mm3(prim: str, size: list[float], part: dict[str,
     return 1000.0
 
 
-def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
-    """对模型规格执行全方位 3D 打印工程自检。"""
+def check_printability(spec: dict[str, Any], material: str = "PLA") -> PrintabilityReport:
+    """对模型规格执行全方位 3D 打印工程自检，支持多耗材材质物性推导。"""
     report = PrintabilityReport()
     parts = spec.get("parts") or []
     if not parts:
         report.printable = True
         return report
+
+    mat_key = str(material or spec.get("material") or "PLA").upper().strip()
+    if mat_key not in MATERIAL_PROFILES:
+        mat_key = "PLA"
+    prof = MATERIAL_PROFILES[mat_key]
+    density = float(prof["density"])
+    shrinkage = float(prof["shrinkage_pct"])
+    report.material = mat_key
+    report.shrinkage_pct = shrinkage
 
     min_x, max_x = float("inf"), float("-inf")
     min_y, max_y = float("inf"), float("-inf")
@@ -382,7 +457,15 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
         report.tips.append(f"模型外轮廓 ({max(dim_x, dim_y, dim_z):.1f}mm) 超出常见 256mm 热床，需对角线排布或切块打印")
         report.score -= 5
 
-    # 体积、耗材克重与耗时估算
+    # 材料特性指导提示
+    if prof.get("enclosure_required"):
+        report.tips.append(f"采用 {prof['name']} 耗材: 收缩率达 {shrinkage}%，建议开启封闭式保温箱 (Enclosure) 避免翘边开裂")
+    if shrinkage >= 1.0:
+        report.tips.append(f"针对 {mat_key} 高收缩特性，紧密装配孔建议增加 0.2~0.4mm 补偿，或切片时整体缩放 {100.0 + shrinkage:.1f}%")
+    if mat_key == "TPU":
+        report.tips.append("TPU 软胶耗材打印注意：请关闭回抽或限制在 1mm 以内，走丝速度建议调至 25~35mm/s")
+
+    # 体积、耗材克重与耗时估算 (结合具体材料密度与流速计算)
     total_vol_mm3 = 0.0
     for p in parts:
         prim = p.get("primitive", "cube")
@@ -394,13 +477,12 @@ def check_printability(spec: dict[str, Any]) -> PrintabilityReport:
             total_vol_mm3 = max(total_vol_mm3 - _estimate_primitive_volume_mm3(h_prim, h_size), 0.0)
 
     vol_cm3 = round(total_vol_mm3 / 1000.0, 2)
-    # 按 15% 内部填充 + 3 圈实心壁厚，折合实体填充率约 35%，PLA 密度 1.24g/cm³
-    est_weight = round(vol_cm3 * 1.24 * 0.38, 1)
-    # 典型走丝速度 60mm/s 挤出速率约 12 cm³/小时
-    est_hours = round(max((vol_cm3 * 0.38) / 12.0, 0.2), 1)
-    # 耗材成本核算：以工业标准 PLA 均价 ¥80/kg 与 $20/kg 测算
-    cost_cny = round((est_weight / 1000.0) * 80.0, 2)
-    cost_usd = round((est_weight / 1000.0) * 20.0, 2)
+    # 按 15% 内部填充 + 3 圈实心壁厚，折合实体填充率约 38%
+    est_weight = round(vol_cm3 * density * 0.38, 1)
+    speed_factor = 0.5 if mat_key == "TPU" else (0.8 if mat_key in ("ABS", "PC") else 1.0)
+    est_hours = round(max((vol_cm3 * 0.38) / (12.0 * speed_factor), 0.2), 1)
+    cost_cny = round((est_weight / 1000.0) * float(prof["cost_per_kg_cny"]), 2)
+    cost_usd = round((est_weight / 1000.0) * float(prof["cost_per_kg_usd"]), 2)
 
     report.volume_cm3 = vol_cm3
     report.weight_g = est_weight
@@ -420,14 +502,17 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     name = spec.get("name", "model")
     desc = spec.get("description", "OpenSCAD AI 逆向 3D 模型")
     bbox = report.bounding_box
+    mat_key = report.material if report.material in MATERIAL_PROFILES else "PLA"
+    prof = MATERIAL_PROFILES[mat_key]
 
     # 针对性工艺推导
     has_slender = any("细长" in w for w in report.warnings)
     brim_rec = "强烈建议开启 5mm 外侧裙边 (Outer Brim)" if has_slender else "可选开启裙边 (Brim: 3mm 保持底座稳定)"
     layer_rec = "0.16mm (高精度) 或 0.20mm (标准)" if max(bbox) < 80 else "0.20mm (标准)"
+    enclosure_rec = "必须开启封闭式保温箱 (Enclosure 60°C+)" if prof["enclosure_required"] else "敞开式打印机即可 (无需封箱)"
 
     warnings_md = "\n".join(f"- ⚠️ {w}" for w in report.warnings) if report.warnings else "- ✅ 全模型未检测到明显阻断性薄壁风险"
-    tips_md = "\n".join(f"- 💡 {t}" for t in report.tips) if report.tips else "- 💡 推荐使用标准热床温度 (PEI: 60°C) 确保首层良好附着"
+    tips_md = "\n".join(f"- 💡 {t}" for t in report.tips) if report.tips else f"- 💡 推荐使用标准热床温度 ({prof['bed_temp']}) 确保首层良好附着"
     user_tips = "\n".join(f"- 💡 {t}" for t in spec.get("print_tips") or [])
 
     content = f"""# 3D 打印切片与工艺指导书: {name}
@@ -437,24 +522,27 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
 ## 📊 物理特性与耗材预估
 | 指标 | 预估数值 | 评估参考 |
 |---|---|---|
+| **推荐材质** | `{prof['name']}` | 密度: {prof['density']} g/cm³ · 热收缩率: {prof['shrinkage_pct']}% |
 | **包围盒跨度** | `{bbox[0]} × {bbox[1]} × {bbox[2]} mm` | 适配常见 256×256mm 打印机 |
 | **预估实体体积** | `{report.volume_cm3:.1f} cm³` | 净体积几何积分 |
-| **预估耗材克重** | `约 {report.weight_g:.1f} g` | 以标准 PLA 耗材 / 15% 填充率测算 |
-| **预估打印耗时** | `约 {report.print_time_hours:.1f} 小时` | 典型 60mm/s 走丝速度 |
-| **预估耗材成本** | `约 ¥{report.cost_cny:.2f} 元 (${report.cost_usd:.2f})` | 工业级 PLA/PETG 市场均价折算 |
+| **预估耗材克重** | `约 {report.weight_g:.1f} g` | 以 {mat_key} 材料 / 15% 填充率测算 |
+| **预估打印耗时** | `约 {report.print_time_hours:.1f} 小时` | 针对 {mat_key} 工艺流速调校 |
+| **预估耗材成本** | `约 ¥{report.cost_cny:.2f} 元 (${report.cost_usd:.2f})` | {mat_key} 耗材市场均价核算 |
 
 ---
 
-## ⚙️ 推荐切片工艺参数 (Slicer Configuration)
+## ⚙️ 推荐切片工艺参数 (Slicer Configuration - {mat_key})
 
 | 切片参数项 | 推荐设定值 | 针对性工程建议 |
 |---|---|---|
-| **首选耗材类型** | **PLA / PETG** | 收缩率低、尺寸稳定性优良 |
+| **首选耗材类型** | **{prof['name']}** | {prof['features']} |
 | **层高 (Layer Height)** | `{layer_rec}` | 首层建议 0.24mm，后续层 0.20mm |
 | **外墙圈数 (Wall Loops)**| `3 圈 (约 1.2mm 壁厚)` | 提高部件外壳刚度 |
 | **填充率与图案** | `15% ~ 20% (Gyroid 陀螺仪图案)` | 陀螺仪图案在各向受力均匀且不易与喷嘴刮擦 |
-| **喷嘴温度** | `210°C (PLA) / 235°C (PETG)` | 保证熔融层间高附着力 |
-| **热床温度** | `60°C (PEI 弹簧钢板)` | 防止首层翘边，打完自然脱落 |
+| **喷嘴温度** | `{prof['nozzle_temp']}` | 保证熔融层间高附着力 |
+| **热床温度** | `{prof['bed_temp']}` | 防止首层翘边，打完自然脱落 |
+| **冷却风扇** | `{prof['fan_speed']}` | 兼顾细部硬化与层间熔融融合度 |
+| **封箱保温** | `{enclosure_rec}` | 控制环境温降与防冷缩 |
 | **支撑策略 (Supports)** | 自动有机树状支撑 (Tree Support) | 悬空角阈值设为 45° |
 | **裙边与附着 (Brim)** | `{brim_rec}` | 提高细小接触面的附着力 |
 
@@ -471,4 +559,4 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     return out_path
 
 
-__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb"]
+__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb", "MATERIAL_PROFILES"]

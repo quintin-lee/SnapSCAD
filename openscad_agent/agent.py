@@ -283,7 +283,7 @@ class OpenscadAgent:
                 viewer_html = str(v_cand)
 
         from .doctor import check_printability, generate_print_guide
-        doc_report = check_printability(spec)
+        doc_report = check_printability(spec, material=getattr(self.config, "material", "PLA"))
         _log.info(
             "[doctor] %s | 尺寸: %s mm | 估算体积: %.1f cm³ (约%.1fg, 成本:约¥%.2f/耗时:%.1f小时)",
             doc_report.summary(), doc_report.bounding_box, doc_report.volume_cm3, doc_report.weight_g, doc_report.cost_cny, doc_report.print_time_hours

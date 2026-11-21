@@ -707,7 +707,8 @@ def spec_to_scad(
     out.append("")
 
     # 3D 打印适印性诊断 (Printability Doctor)
-    doc = check_printability(spec)
+    mat = getattr(config, "material", "PLA") if config else "PLA"
+    doc = check_printability(spec, material=mat)
     out.append("// ---------------- 3D 打印切片自检报告 (Printability Doctor) ----------------")
     out.append(f"// {doc.summary()}")
     out.append(f"// 包围盒尺寸: {doc.bounding_box[0]} × {doc.bounding_box[1]} × {doc.bounding_box[2]} mm")

@@ -160,6 +160,8 @@ class AgentConfig:
     export_2d: bool = False
     #: 是否并联提取 Canny 物理几何边缘轮廓辅助视觉理解
     enable_edge_map: bool = True
+    #: 默认 3D 打印推荐耗材类型 (PLA/PETG/ABS/TPU/PC)
+    material: str = "PLA"
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
