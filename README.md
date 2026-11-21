@@ -55,7 +55,9 @@
 - **物理尺度自动归一化**：支持 `cm` / `inch` / `m` 国际单位制自动按比例缩放至标准 `mm`，杜绝尺寸缩水或暴涨。
 - **切片工艺指导书与耗材预估**：自动输出工业级 Markdown 指导书（预估打印耗时、耗材克重、推荐层高、外圈数、陀螺仪填充图案与支撑策略）。
 - **桌面级生产力控制**：GUI 具备任务实时一键安全中止（Abort）、智能工程公差约束追加（Enhance Prompt）。
-- **极速平滑倒圆角 (Fillet)**：立方体支持 `fillet` 倒圆角参数，通过 2D `offset` + `linear_extrude` 实现毫秒级无卡顿圆角造型。
+- **极速平滑倒圆角 (Fillet) 与 45° 倒棱角 (Chamfer)**：立方体支持 `fillet` 倒圆角与 `chamfer` 45° 倒角，圆柱立柱支持顶部机械导入角，通过 2D `offset(chamfer=true)` 实现毫秒级无卡顿倒棱造型。
+- **高阶 CSG 层级装配布尔运算**：装配层支持并集 (`union_parts`)、交集 (`intersection_parts`) 与布尔差集减除 (`difference_parts` / `difference_from`) 的任意组合。
+- **多模型生态与提供商一键预设**：预设支持 Agnes AI、OpenAI、DeepSeek、Google Gemini、SiliconFlow (硅基流动)、Alibaba DashScope (通义千问)、Groq 与本地离线 Ollama/vLLM（免 Key 运行），内置 Token 截断防护与端点自动补齐。
 - **全套工程资产打包 (All-in-One ZIP)**：CLI (`--zip`) 与 GUI 均支持一键将模型全量资产（3D、2D图纸、源码、查看器、工艺书）归档为单文件便携 `.zip`。
 - **专业 CAD 语法高亮 IDE**：GUI 源码编辑器集成 `OpenScadHighlighter`，提供关键字、变换、原语、数值与注释的全彩语法着色。
 - **自愈温控阶梯爬升**：编译重试自愈自动阶梯升温并注入针对性编译器错误诊断建议。
