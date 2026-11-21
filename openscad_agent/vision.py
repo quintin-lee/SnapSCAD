@@ -291,16 +291,26 @@ class AgnesVision:
             raise
 
     # ------------------------------------------------------------------
+    def _endpoint_url(self) -> str:
+        """规范化并返回 OpenAI 兼容 chat/completions 端点 URL。"""
+        base = (self.config.base_url or "https://apihub.agnes-ai.com").rstrip("/")
+        if base.endswith("/chat/completions"):
+            return base
+        if base.endswith("/v1"):
+            return f"{base}/chat/completions"
+        return f"{base}/v1/chat/completions"
+
     def _post_chat(self, messages: list[dict[str, Any]]) -> str:
         """公共 POST chat/completions，含 429/5xx 指数退避重试，返回原始文本。
 
         被 _chat（需解析 spec）与 _chat_raw（通用文本）共享，消除重复重试逻辑。
         """
-        url = f"{self.config.base_url.rstrip('/')}/v1/chat/completions"
+        url = self._endpoint_url()
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
+            "max_tokens": getattr(self.config, "max_tokens", 4096),
         }
         max_attempts = 8
         for attempt in range(1, max_attempts + 1):

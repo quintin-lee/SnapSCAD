@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from openscad_agent import AgentConfig, OpenscadAgent, SPEC_SCHEMA
+from openscad_agent.core import PROVIDER_PRESETS
 from openscad_agent.gallery import generate_gallery
 from openscad_agent.log import setup_logging
 from openscad_agent.packager import package_project
@@ -33,6 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--gallery", action="store_true", help="根据输出目录中的全部模型生成 3D 展厅画廊网页 (gallery.html)")
 
+    p.add_argument("--provider", choices=list(PROVIDER_PRESETS.keys()),
+                   help="模型提供商预设 (agnes/openai/deepseek/gemini/ollama/siliconflow/dashscope/groq/openrouter)")
+    p.add_argument("--max-tokens", type=int, default=4096, help="LLM 最大输出 token 限制 (默认 4096)")
     p.add_argument("--hint", default="", help="对图片的补充说明, 帮助 LLM 理解物体")
     p.add_argument("--output", "-o", default="out", help="输出目录 (默认 ./out)")
     p.add_argument("--format", "-f", default="stl",
@@ -95,12 +99,20 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_help()
         return 1
 
+    if args.provider and args.provider in PROVIDER_PRESETS:
+        preset = PROVIDER_PRESETS[args.provider]
+        if args.base_url == "https://apihub.agnes-ai.com":
+            args.base_url = preset["base_url"]
+        if args.model == "agnes-3.0-flash":
+            args.model = preset["model"]
+
     config = AgentConfig(
         output_dir=args.output,
         export_format="png" if args.preview_only else args.format,
         render_precision=args.precision,
         model=args.model,
         base_url=args.base_url,
+        max_tokens=args.max_tokens,
         image_max_side=args.max_image_side,
         extra_system=args.extra_system,
         export_3mf=not args.no_3mf,

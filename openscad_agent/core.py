@@ -58,6 +58,67 @@ def find_executable(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 提供商预设
+# ---------------------------------------------------------------------------
+
+PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "agnes": {
+        "name": "Agnes AI (默认云端)",
+        "base_url": "https://apihub.agnes-ai.com",
+        "model": "agnes-3.0-flash",
+        "env_keys": ["AGNES_API_KEY", "AGNES_API_TOKEN", "APIHUB_AGNES_API_KEY"],
+    },
+    "openai": {
+        "name": "OpenAI (官方接口)",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o",
+        "env_keys": ["OPENAI_API_KEY"],
+    },
+    "deepseek": {
+        "name": "DeepSeek (官方接口)",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "env_keys": ["DEEPSEEK_API_KEY"],
+    },
+    "gemini": {
+        "name": "Google Gemini (兼容接口)",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-2.0-flash",
+        "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    },
+    "ollama": {
+        "name": "本地 Ollama (完全离线免Key)",
+        "base_url": "http://localhost:11434/v1",
+        "model": "llava:latest",
+        "env_keys": [],
+    },
+    "siliconflow": {
+        "name": "SiliconFlow (硅基流动)",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "model": "Qwen/Qwen2.5-VL-72B-Instruct",
+        "env_keys": ["SILICONFLOW_API_KEY"],
+    },
+    "dashscope": {
+        "name": "Alibaba DashScope (通义千问)",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-vl-max",
+        "env_keys": ["DASHSCOPE_API_KEY"],
+    },
+    "groq": {
+        "name": "Groq (极速推理)",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.2-90b-vision-preview",
+        "env_keys": ["GROQ_API_KEY"],
+    },
+    "openrouter": {
+        "name": "OpenRouter (多模型聚合)",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "anthropic/claude-3.5-sonnet",
+        "env_keys": ["OPENROUTER_API_KEY"],
+    },
+}
+
+# ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
 
@@ -65,7 +126,7 @@ def find_executable(name: str) -> str:
 class AgentConfig:
     """Agent 运行配置。
 
-    API key 从环境变量 AGNES_API_KEY / AGNES_API_TOKEN / APIHUB_AGNES_API_KEY
+    API key 从环境变量 AGNES_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY 等
     依次读取，绝不写死在代码或文件中。
     """
 
@@ -75,6 +136,8 @@ class AgentConfig:
     model: str = "agnes-3.0-flash"
     #: 采样温度，识别任务保持低温保证 JSON 结构稳定
     temperature: float = 0.2
+    #: LLM 输出最大 Token 限制 (防止复杂模型规格被提供商截断)
+    max_tokens: int = 4096
     #: 生成的 OpenSCAD 工程输出目录
     output_dir: str = "out"
     #: 渲染使用的 OpenSCAD 可执行文件
@@ -133,8 +196,10 @@ class AgentConfig:
             return "ollama-local"
         for var in (
             "AGNES_API_KEY", "AGNES_API_TOKEN", "APIHUB_AGNES_API_KEY",
-            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY",
-            "SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY",
+            "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+            "ANTHROPIC_API_KEY", "SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY",
+            "GROQ_API_KEY", "MOONSHOT_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY",
+            "ZHIPU_API_KEY",
         ):
             key = os.environ.get(var)
             if key:
@@ -147,7 +212,7 @@ class AgentConfig:
         key = self.api_key
         if not key:
             raise RuntimeError(
-                "缺少 API Key。请设置环境变量 AGNES_API_KEY（或 OPENAI_API_KEY / DEEPSEEK_API_KEY）\n"
+                "缺少 API Key。请设置环境变量 AGNES_API_KEY（或 OPENAI_API_KEY / DEEPSEEK_API_KEY / GEMINI_API_KEY）\n"
                 "若使用本地离线模型（Ollama/vLLM），请将 Base URL 设为 http://localhost:11434/v1 免 Key 运行。"
             )
         return key

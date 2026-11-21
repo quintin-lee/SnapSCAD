@@ -400,6 +400,10 @@ class MainWindow(QMainWindow):
             "Agnes AI (默认云端)",
             "OpenAI (官方接口)",
             "DeepSeek (官方接口)",
+            "Google Gemini (官方兼容接口)",
+            "SiliconFlow 硅基流动",
+            "Alibaba DashScope (通义千问)",
+            "Groq (极速推理)",
             "本地 Ollama (完全离线免Key)",
             "自定义端点",
         ])
@@ -804,6 +808,18 @@ class MainWindow(QMainWindow):
         elif "DeepSeek" in choice:
             self.txt_base_url.setText("https://api.deepseek.com")
             self.txt_model.setText("deepseek-chat")
+        elif "Gemini" in choice:
+            self.txt_base_url.setText("https://generativelanguage.googleapis.com/v1beta/openai")
+            self.txt_model.setText("gemini-2.0-flash")
+        elif "SiliconFlow" in choice:
+            self.txt_base_url.setText("https://api.siliconflow.cn/v1")
+            self.txt_model.setText("Qwen/Qwen2.5-VL-72B-Instruct")
+        elif "DashScope" in choice:
+            self.txt_base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.txt_model.setText("qwen-vl-max")
+        elif "Groq" in choice:
+            self.txt_base_url.setText("https://api.groq.com/openai/v1")
+            self.txt_model.setText("llama-3.2-90b-vision-preview")
         elif "Ollama" in choice:
             self.txt_base_url.setText("http://localhost:11434/v1")
             self.txt_model.setText("qwen2.5-coder:latest")

@@ -164,11 +164,42 @@ def test_packager():
 
 
 def test_offline_gateway():
-    """测试 8: 本地离线端点与 API Key 网关"""
+    """测试 8: 本地离线端点、多提供商预设与 API Key 网关"""
     cfg_loc = AgentConfig(base_url="http://localhost:11434/v1")
     assert cfg_loc.is_local_endpoint is True
     assert cfg_loc.api_key == "ollama-local"
     assert cfg_loc.require_api_key() == "ollama-local"
+    assert cfg_loc.max_tokens == 4096
+
+    # 扩展提供商预设与端点规范化测试
+    from openscad_agent.core import PROVIDER_PRESETS
+    from openscad_agent.vision import AgnesVision
+    assert "gemini" in PROVIDER_PRESETS
+    assert "groq" in PROVIDER_PRESETS
+    assert "deepseek" in PROVIDER_PRESETS
+    assert "siliconflow" in PROVIDER_PRESETS
+
+    # 端点 URL 规范化测试 (自动消除 /v1 重复)
+    v_gemini = AgnesVision(AgentConfig(base_url="https://generativelanguage.googleapis.com/v1beta/openai"))
+    assert v_gemini._endpoint_url() == "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions"
+
+    v_v1 = AgnesVision(AgentConfig(base_url="http://localhost:11434/v1"))
+    assert v_v1._endpoint_url() == "http://localhost:11434/v1/chat/completions"
+
+    v_full = AgnesVision(AgentConfig(base_url="https://custom.endpoint.com/v1/chat/completions"))
+    assert v_full._endpoint_url() == "https://custom.endpoint.com/v1/chat/completions"
+
+    # 扩展环境变量 API Key 读取 (如 GEMINI_API_KEY)
+    old_key = os.environ.get("GEMINI_API_KEY")
+    os.environ["GEMINI_API_KEY"] = "test-gemini-key-123"
+    try:
+        cfg_gem = AgentConfig(base_url="https://generativelanguage.googleapis.com/v1beta/openai")
+        assert cfg_gem.api_key is not None
+    finally:
+        if old_key is not None:
+            os.environ["GEMINI_API_KEY"] = old_key
+        else:
+            os.environ.pop("GEMINI_API_KEY", None)
 
 
 def test_blueprint_and_explode():
