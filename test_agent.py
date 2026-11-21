@@ -148,7 +148,7 @@ def test_viewer_and_gallery():
     generate_html_viewer(stl, viewer_p, "TestGeomAll")
     assert viewer_p.exists()
     vt = viewer_p.read_text(encoding="utf-8")
-    assert "btn-clip" in vt and "btn-ruler" in vt and "btn-theme" in vt and "btn-full" in vt
+    assert "btn-clip" in vt and "btn-ruler" in vt and "btn-axes" in vt and "btn-theme" in vt and "btn-full" in vt
 
     gallery_p = generate_gallery("out_test")
     assert gallery_p.exists()

@@ -846,6 +846,7 @@ def generate_html_viewer(
 <div class="toolbar">
   <button id="btn-rotate" class="active">🔄 旋转</button>
   <button id="btn-wire">🕸️ 线框</button>
+  <button id="btn-axes">🧭 坐标轴</button>
   <button id="btn-clip">✂️ 剖切</button>
   <button id="btn-ruler">📏 尺寸</button>
   <button id="btn-cap">📸 截图</button>
@@ -1082,6 +1083,19 @@ window.addEventListener('DOMContentLoaded', () => {{
     showRuler = !showRuler;
     boxHelper.visible = showRuler;
     btnRuler.classList.toggle('active', showRuler);
+  }});
+
+  // 空间 XYZ 坐标轴辅助 (AxesHelper: 红X 绿Y 蓝Z)
+  const axesHelper = new THREE.AxesHelper(maxDim * 0.9);
+  axesHelper.visible = false;
+  scene.add(axesHelper);
+
+  let showAxes = false;
+  const btnAxes = document.getElementById('btn-axes');
+  btnAxes.addEventListener('click', () => {{
+    showAxes = !showAxes;
+    axesHelper.visible = showAxes;
+    btnAxes.classList.toggle('active', showAxes);
   }});
 
   document.getElementById('btn-reset').addEventListener('click', () => {{
