@@ -459,6 +459,57 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 8. 热力学有限元翘曲形变分析 (Thermal Warping Analysis)
+        if clean_path == "/api/fea/thermal_warping":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                self.send_json({"error": f"未找到模型规格: {stem}_spec.json"}, status=404)
+                return
+            from .fea import estimate_thermal_warping
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                material = body.get("material", "PLA")
+                chamber = bool(body.get("chamber_heated", False))
+                report = estimate_thermal_warping(spec, material=material, chamber_heated=chamber)
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "report": report.to_dict(),
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # 9. 3D 装配公差与孔径热缩反向补偿重载 (Tolerance & Shrinkage Compensation)
+        if clean_path == "/api/tolerance/compensate":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+            material = body.get("material", "PLA")
+            fit_type = body.get("fit_type", "normal")
+            recompile = bool(body.get("recompile", True))
+            from .fea import compensate_and_recompile_model
+            try:
+                spec_p, scad_p, comp_spec, actions = compensate_and_recompile_model(
+                    stem, out_dir=out_dir, material=material, fit_type=fit_type, recompile=recompile
+                )
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "actions": actions,
+                    "spec": comp_spec,
+                    "stl": f"{stem}.stl",
+                    "message": f"装配公差与热缩补偿成功并已重新渲染 ({len(actions)} 项修正)",
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -614,6 +665,41 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 out_png = out_dir / f"{stem}_blueprint.png"
                 generate_technical_blueprint(spec, out_svg, out_png=out_png, preview_png=out_dir / f"{stem}.png")
                 return {"success": True, "stem": stem, "svg": out_svg.name, "png": out_png.name if out_png.exists() else ""}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/fea/thermal_warping")
+        def fea_thermal_warping_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}_spec.json")
+            from .fea import estimate_thermal_warping
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                material = body.get("material", "PLA")
+                chamber = bool(body.get("chamber_heated", False))
+                report = estimate_thermal_warping(spec, material=material, chamber_heated=chamber)
+                return {"success": True, "stem": stem, "report": report.to_dict()}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/tolerance/compensate")
+        def tolerance_compensate_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            material = body.get("material", "PLA")
+            fit_type = body.get("fit_type", "normal")
+            recompile = bool(body.get("recompile", True))
+            from .fea import compensate_and_recompile_model
+            try:
+                _, _, comp_spec, actions = compensate_and_recompile_model(
+                    stem, out_dir=out_dir, material=material, fit_type=fit_type, recompile=recompile
+                )
+                return {"success": True, "stem": stem, "actions": actions, "spec": comp_spec}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

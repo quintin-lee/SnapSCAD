@@ -279,6 +279,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-params', this)">🎛️ 参数调优</button>
       <button class="tab-btn" onclick="switchTab('tab-patch', this)">✍️ 增量修剪</button>
       <button class="tab-btn" onclick="switchTab('tab-motion', this)">🎮 机构仿真</button>
+      <button class="tab-btn" onclick="switchTab('tab-fea', this)">🌡️ 热力与公差</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -368,6 +369,44 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <div class="metric-title" style="margin-top:14px;margin-bottom:8px;">机构运动副自由度 (Joints)</div>
       <div id="joint-controls-list" style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;">
         <div style="color:var(--text-muted);font-size:0.8rem;">正在加载当前模型运动副...</div>
+      </div>
+    </div>
+
+    <!-- 热力学翘曲分析与装配公差预补偿 -->
+    <div id="tab-fea" class="tab-content">
+      <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">
+        有限元离散热应变梯度的翘曲抬升估算，与孔洞负向热缩/配合间隙一键预补偿。
+      </div>
+      <div class="form-group">
+        <label>目标成型耗材:</label>
+        <select id="fea-material" style="width:100%">
+          <option value="PLA">PLA (收缩率 0.3%, 易打印原型)</option>
+          <option value="PETG">PETG (收缩率 0.5%, 耐候高韧)</option>
+          <option value="ABS">ABS (收缩率 1.5%, 高温易翘曲)</option>
+          <option value="TPU">TPU (收缩率 0.8%, 柔性弹性体)</option>
+          <option value="PC">PC (收缩率 1.6%, 极高强度耐热)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>装配配合公差等级:</label>
+        <select id="fea-fit" style="width:100%">
+          <option value="normal">过渡配合 Normal (+0.20mm, 紧固件穿孔/定位销)</option>
+          <option value="loose">间隙配合 Loose (+0.35mm, 滑块/合页铰链旋转)</option>
+          <option value="press_fit">过盈配合 Press Fit (+0.05mm, 免胶水强力压配)</option>
+        </select>
+      </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="fea-chamber" style="width:auto;cursor:pointer;">
+        <label for="fea-chamber" style="margin:0;cursor:pointer;">启用恒温封箱 (Chamber Heated &gt;=50°C)</label>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button onclick="triggerAnalyzeThermalWarping()" style="flex:1;background:var(--bg-card);border:1px solid var(--border)">🔍 翘曲风险分析</button>
+        <button onclick="triggerApplyToleranceCompensation()" class="btn-success" style="flex:1">⚡ 应用公差补偿</button>
+      </div>
+      <div id="fea-result-box" style="margin-top:12px;background:var(--bg-card);padding:10px;border-radius:6px;border:1px solid var(--border);display:none;">
+        <div id="fea-risk-badge" style="font-weight:700;margin-bottom:6px;">-</div>
+        <div id="fea-lift-val" style="font-size:0.8rem;color:var(--text);margin-bottom:6px;">-</div>
+        <div id="fea-tips" style="font-size:0.75rem;color:var(--text-muted);line-height:1.4;">-</div>
       </div>
     </div>
   </div>
@@ -1326,6 +1365,68 @@ async function triggerExportBlueprint() {
     }
   } catch (e) {
     alert('导出图纸异常: ' + e);
+  }
+}
+
+async function triggerAnalyzeThermalWarping() {
+  const mat = document.getElementById('fea-material').value;
+  const chamber = document.getElementById('fea-chamber').checked;
+  const resBox = document.getElementById('fea-result-box');
+  resBox.style.display = 'block';
+  document.getElementById('fea-risk-badge').innerText = '正在计算离散有限元热形变...';
+  try {
+    const res = await fetch('/api/fea/thermal_warping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, material: mat, chamber_heated: chamber })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const rep = data.report;
+      const badge = document.getElementById('fea-risk-badge');
+      if (rep.overall_risk === 'HIGH') {
+        badge.innerText = '⚠️ 翘曲高危 (HIGH RISK)';
+        badge.style.color = '#ef4444';
+      } else if (rep.overall_risk === 'MEDIUM') {
+        badge.innerText = '⚡ 中度翘曲 (MEDIUM RISK)';
+        badge.style.color = '#f59e0b';
+      } else {
+        badge.innerText = '✅ 热力学稳定 (LOW RISK)';
+        badge.style.color = '#10b981';
+      }
+      document.getElementById('fea-lift-val').innerText = `最大抬升量: ${rep.max_lift_mm} mm (材料收缩率: ${rep.shrinkage_pct}%)`;
+      document.getElementById('fea-tips').innerHTML = rep.recommendations.map(r => `• ${r}`).join('<br>');
+    } else {
+      alert('分析失败: ' + data.error);
+    }
+  } catch (e) {
+    alert('分析异常: ' + e);
+  }
+}
+
+async function triggerApplyToleranceCompensation() {
+  const mat = document.getElementById('fea-material').value;
+  const fit = document.getElementById('fea-fit').value;
+  alert(`正在对模型执行智能装配公差 (+孔洞热缩负补偿) 并重新渲染...`);
+  try {
+    const res = await fetch('/api/tolerance/compensate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, material: mat, fit_type: fit, recompile: true })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ 公差预补偿完成！\n\n• 修正明细:\n${data.actions.join('\n')}\n\n正在重新载入 3D 补偿实体...`);
+      loadSTL(activeModelStem + '.stl?t=' + Date.now());
+      try {
+        const rScad = await fetch(activeModelStem + '.scad?t=' + Date.now());
+        if (rScad.ok) document.getElementById('scad-editor').value = await rScad.text();
+      } catch (_) {}
+    } else {
+      alert('❌ 补偿失败: ' + data.error);
+    }
+  } catch (e) {
+    alert('请求异常: ' + e);
   }
 }
 

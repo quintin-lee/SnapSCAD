@@ -758,6 +758,10 @@ class MainWindow(QMainWindow):
         self.btn_export_blueprint.clicked.connect(self.on_export_blueprint)
         act_bar.addWidget(self.btn_export_blueprint)
 
+        self.btn_tolerance = QPushButton("🌡️ 热缩与公差补偿")
+        self.btn_tolerance.clicked.connect(self.on_tolerance_compensation)
+        act_bar.addWidget(self.btn_tolerance)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1549,6 +1553,46 @@ class MainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_svg)))
         except Exception as e:
             QMessageBox.warning(self, "图纸生成失败", f"生成工程图纸异常: {e}")
+
+    def on_tolerance_compensation(self) -> None:
+        """根据耗材收缩率与配合要求，执行智能装配配合公差与孔径热缩反向预补偿。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        fits = [
+            ("过渡配合 Normal (+0.20mm, 推荐紧固件固定)", "normal"),
+            ("间隙配合 Loose (+0.35mm, 推荐活动合页/滑块)", "loose"),
+            ("过盈配合 Press Fit (+0.05mm, 免胶水紧压配)", "press_fit"),
+        ]
+        items = [f[0] for f in fits]
+        chosen, ok = QInputDialog.getItem(self, "选择配合公差等级", "请选择装配公差模式与孔径热缩补偿级别:", items, 0, False)
+        if not ok or not chosen:
+            return
+        fit_key = next((f[1] for f in fits if f[0] == chosen), "normal")
+
+        from openscad_agent.fea import compensate_and_recompile_model
+        try:
+            mat = getattr(self, "cmb_material", None)
+            mat_name = mat.currentText() if mat else "PLA"
+            _, _, _, actions = compensate_and_recompile_model(
+                scad_p.stem, out_dir=scad_p.parent, material=mat_name, fit_type=fit_key, recompile=True
+            )
+            self.log(f"🌡️ 装配公差与孔径热缩预补偿完成: {len(actions)} 项修正")
+            self._refresh_file_list(scad_p.parent)
+            self._load_scad_into_editor(scad_p)
+            QMessageBox.information(
+                self, "公差补偿与重载成功",
+                f"已为模型应用 {mat_name} 热缩与装配配合补偿:\n\n• 修正明细:\n" + "\n".join(actions) +
+                "\n\n已自动更新 3D 实体模型与源码！"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "补偿失败", f"公差补偿异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

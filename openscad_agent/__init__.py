@@ -20,6 +20,12 @@ from .slicer import probe_slicers, slice_model, SlicingConfig, SlicingResult, pa
 from .dispatcher import PrinterDispatcher, DispatchConfig, DispatchResult
 from .blueprint import generate_technical_blueprint
 from .kinematics import KinematicJoint, parse_joints, compute_joint_pose
+from .fea import (
+    estimate_thermal_warping,
+    apply_tolerance_compensation,
+    compensate_and_recompile_model,
+    ThermalWarpingReport,
+)
 
 __all__ = [
     "AgentConfig",
@@ -48,6 +54,10 @@ __all__ = [
     "KinematicJoint",
     "parse_joints",
     "compute_joint_pose",
+    "estimate_thermal_warping",
+    "apply_tolerance_compensation",
+    "compensate_and_recompile_model",
+    "ThermalWarpingReport",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

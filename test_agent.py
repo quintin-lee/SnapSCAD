@@ -1653,6 +1653,101 @@ def test_kinematic_joints_and_motion_simulation():
         assert "applyKinematicPose" in ws_txt
 
 
+def test_thermal_warping_analysis_and_tolerance_compensation():
+    """测试 39: 工业级轻量热力学有限元形变估算 (FEA) 与装配公差热缩预补偿"""
+    from openscad_agent.fea import (
+        estimate_thermal_warping,
+        apply_tolerance_compensation,
+        compensate_and_recompile_model,
+    )
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证热翘曲形变有限元评估 (PLA 低风险 vs 大跨度 ABS 高风险)
+    spec_pla = {
+        "name": "small_bracket",
+        "parts": [{"id": "b1", "primitive": "cube", "size": [30.0, 20.0, 10.0]}],
+    }
+    rep_pla = estimate_thermal_warping(spec_pla, material="PLA")
+    assert rep_pla.overall_risk == "LOW"
+    assert rep_pla.max_lift_mm < 0.5
+
+    spec_abs_large = {
+        "name": "large_chassis",
+        "parts": [{"id": "chassis", "primitive": "cube", "size": [150.0, 100.0, 4.0]}],
+    }
+    rep_abs = estimate_thermal_warping(spec_abs_large, material="ABS", chamber_heated=False)
+    assert rep_abs.overall_risk == "HIGH"
+    assert rep_abs.max_lift_mm >= 1.5
+    assert any("封箱" in r for r in rep_abs.recommendations)
+
+    # 开启恒温封箱后翘曲抬升显著降低
+    rep_abs_chamber = estimate_thermal_warping(spec_abs_large, material="ABS", chamber_heated=True)
+    assert rep_abs_chamber.max_lift_mm < rep_abs.max_lift_mm
+
+    # 2. 验证智能装配配合公差与孔洞负向热缩反向补偿
+    spec_assembly = {
+        "name": "bearing_mount",
+        "parts": [
+            {
+                "id": "mount_block",
+                "primitive": "cube",
+                "size": [50.0, 40.0, 10.0],
+                "holes": [{"primitive": "cylinder", "size": [5.0, 15.0], "center": [0, 0, 0]}],
+            }
+        ],
+    }
+    comp_spec, actions = apply_tolerance_compensation(
+        spec_assembly, material="ABS", fit_type="normal", shrinkage_compensation=True
+    )
+    assert len(actions) == 2
+    # 验证孔径已根据公差与热缩自动扩大
+    compensated_hole_d = comp_spec["parts"][0]["holes"][0]["size"][0]
+    assert compensated_hole_d > 5.30  # 原 5.0mm 扩大至 >5.30mm 以保证打印后完美适配
+    # 验证主体尺寸已根据 ABS 收缩率逆向放大
+    compensated_body_x = comp_spec["parts"][0]["size"][0]
+    assert compensated_body_x > 50.50
+
+    # 3. 验证微服务 FEA 翘曲端点与公差补偿重载 API
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        spec_f = out_dir / "bearing_mount_spec.json"
+        spec_f.write_text(json.dumps(spec_assembly), encoding="utf-8")
+        scad_f = out_dir / "bearing_mount.scad"
+        scad_f.write_text("cube([50, 40, 10]);\n", encoding="utf-8")
+
+        _, _, port = serve_assets(out_dir, port=8998, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 测试热力学分析端点
+            r1 = requests.post(f"{base}/api/fea/thermal_warping", json={
+                "stem": "bearing_mount",
+                "material": "ABS",
+                "chamber_heated": False,
+            }, timeout=10)
+            assert r1.status_code == 200
+            d1 = r1.json()
+            assert d1["success"] is True
+            assert "overall_risk" in d1["report"]
+
+            # 测试装配公差与热缩补偿端点 (recompile=True)
+            r2 = requests.post(f"{base}/api/tolerance/compensate", json={
+                "stem": "bearing_mount",
+                "material": "ABS",
+                "fit_type": "loose",
+                "recompile": True,
+            }, timeout=15)
+            assert r2.status_code == 200
+            d2 = r2.json()
+            assert d2["success"] is True
+            assert len(d2["actions"]) >= 1
+            assert (out_dir / "bearing_mount.stl").exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1698,6 +1793,7 @@ def run_all_tests() -> bool:
         ("工业常识先验规范库与目标 ROI 自动裁剪 (apply_engineering_priors)", test_engineering_priors_and_image_roi_crop),
         ("工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint)", test_dimensioned_technical_blueprint_and_api),
         ("机械机构运动学铰链约束与 Web 3D 动态仿真 (kinematics)", test_kinematic_joints_and_motion_simulation),
+        ("工业级轻量热力学有限元形变估算与装配公差热缩预补偿 (fea)", test_thermal_warping_analysis_and_tolerance_compensation),
     ]
 
     all_ok = True
