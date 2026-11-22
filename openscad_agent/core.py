@@ -713,6 +713,26 @@ def extract_edge_map(src: Path, dst: Path) -> Path:
     return dst
 
 
+def auto_crop_roi(src: Path, dst: Path, fuzz_pct: int = 15) -> Path:
+    """使用 ImageMagick 自动分析背景与非主体杂色，将图片自动裁剪到目标主体 ROI (Region of Interest)。
+
+    消除桌面杂乱背景与大面积空白，让大模型只聚焦目标几何结构，大幅提升识别精确度并压缩视觉 Token。
+    """
+    src = Path(src)
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    magick = shutil.which("magick") or shutil.which("convert")
+    if not magick:
+        return dst
+    cmd = [magick, str(src), "-fuzz", f"{fuzz_pct}%", "-trim", "+repage", str(dst)]
+    code, _, _ = run_cmd(cmd)
+    if code != 0 or not dst.exists() or dst.stat().st_size == 0:
+        shutil.copy2(src, dst)
+    else:
+        _log.info("[preprocess] 目标主体 ROI 自动裁剪完成: %s", dst.name)
+    return dst
+
+
 # ---------------------------------------------------------------------------
 # 模型规格（LLM 输出的结构化中间表示）
 # ---------------------------------------------------------------------------
