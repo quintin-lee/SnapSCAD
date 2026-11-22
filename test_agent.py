@@ -509,6 +509,75 @@ def test_threads_and_gears():
     assert res.exists() and res.stat().st_size > 0
 
 
+def test_pulleys_snaps_magnets():
+    """测试 19: GT2 同步轮与免胶装配结构 (悬臂梁卡扣与强磁沉孔)"""
+    from openscad_agent.spec import validate_spec
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    spec = {
+        "name": "assembly_primitives",
+        "parts": [
+            {
+                "id": "gt2_20t",
+                "primitive": "timing_pulley",
+                "teeth": 20,
+                "belt_width": 6.0,
+                "bore": 5.0,
+                "flange": True,
+                "center": [-25, 0, 0],
+            },
+            {
+                "id": "snap_latch",
+                "primitive": "snap_joint",
+                "length": 15.0,
+                "width": 8.0,
+                "thickness": 1.6,
+                "hook_depth": 1.2,
+                "center": [0, 0, 0],
+            },
+            {
+                "id": "mounting_block",
+                "primitive": "cube",
+                "size": [20, 20, 10],
+                "center": [25, 0, 0],
+                "holes": [
+                    {
+                        "primitive": "magnet_pocket",
+                        "diameter": 6.0,
+                        "depth": 3.0,
+                        "clearance": 0.2,
+                        "ejection_hole": 1.5,
+                        "center": [25, 0, 5],
+                    }
+                ],
+            },
+        ],
+        "assembly": {
+            "union_parts": ["gt2_20t", "snap_latch", "mounting_block"],
+        },
+    }
+
+    norm, issues = validate_spec(spec)
+    assert len(norm["parts"]) == 3
+    scad_code = spec_to_scad(norm)
+    assert "timing pulley" in scad_code or "cylinder" in scad_code
+    assert "snap joint" in scad_code or "polygon" in scad_code
+    assert "永磁体装配沉孔" in scad_code or "magnet" in scad_code
+
+    scad_path = Path("out_test/test_assembly_primitives.scad")
+    scad_path.write_text(scad_code, encoding="utf-8")
+
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+    ok_val, msg_val = renderer.validate(scad_path)
+    assert ok_val, f"OpenSCAD 编译失败: {msg_val}"
+
+    out_stl = Path("out_test/test_assembly_primitives.stl")
+    res = renderer.export_model(scad_path, out_stl, force=True)
+    assert res.exists() and res.stat().st_size > 0
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -534,6 +603,7 @@ def run_all_tests() -> bool:
         ("GUI 嵌入式 3D 交互视口与双模渲染切换", test_gui_embedded_viewport),
         ("增量渲染缓存检测与多视角并发渲染加速", test_caching_and_parallel_rendering),
         ("工业级机械原语与复杂特征库 (公制螺纹与渐开线齿轮)", test_threads_and_gears),
+        ("GT2 同步轮与免胶装配结构 (悬臂梁卡扣与强磁沉孔)", test_pulleys_snaps_magnets),
     ]
 
     all_ok = True

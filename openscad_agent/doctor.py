@@ -149,7 +149,38 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
     rz = float(rot[2]) if len(rot) >= 3 else 0.0
     has_rot = any(abs(v) > 1e-4 for v in (rx, ry, rz))
 
-    if prim in ("cube", "cuboid", "box"):
+    if prim in ("cube", "cuboid", "box", "snap_joint", "snap_fit"):
+        if prim in ("snap_joint", "snap_fit"):
+            l = float(size[0]) if len(size) >= 1 else 12.0
+            w = float(size[1]) if len(size) >= 2 else 6.0
+            t = float(size[2]) if len(size) >= 3 else 1.5
+            h_hook = float(size[3]) if len(size) >= 4 else 1.0
+            local_corners = [
+                (0.0, -w / 2.0, 0.0),
+                (t + h_hook, -w / 2.0, 0.0),
+                (0.0, w / 2.0, 0.0),
+                (t + h_hook, w / 2.0, 0.0),
+                (0.0, -w / 2.0, l + h_hook),
+                (t + h_hook, -w / 2.0, l + h_hook),
+                (0.0, w / 2.0, l + h_hook),
+                (t + h_hook, w / 2.0, l + h_hook),
+            ]
+            if not has_rot:
+                pts = [(cx + c[0], cy + c[1], cz + c[2]) for c in local_corners]
+                return (
+                    (min(p[0] for p in pts), min(p[1] for p in pts), min(p[2] for p in pts)),
+                    (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts)),
+                )
+            R = _get_rotation_matrix(rx, ry, rz)
+            pts = [
+                (cx + rv[0], cy + rv[1], cz + rv[2])
+                for rv in (_apply_rotation(R, c) for c in local_corners)
+            ]
+            return (
+                (min(p[0] for p in pts), min(p[1] for p in pts), min(p[2] for p in pts)),
+                (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts)),
+            )
+
         w, d, h = size[0], size[1], size[2]
         if not has_rot:
             return ((cx - w / 2, cy - d / 2, cz), (cx + w / 2, cy + d / 2, cz + h))
@@ -170,8 +201,22 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
             (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts)),
         )
 
-    elif prim in ("cylinder", "thread", "metric_thread", "gear", "involute_gear"):
-        if prim in ("gear", "involute_gear"):
+    elif prim in ("cylinder", "thread", "metric_thread", "gear", "involute_gear", "timing_pulley", "gt2_pulley", "magnet_pocket", "magnet_hole"):
+        if prim in ("timing_pulley", "gt2_pulley"):
+            teeth = float(size[0]) if len(size) >= 1 else 20.0
+            w = float(size[1]) if len(size) >= 2 else 6.0
+            flange = bool(size[3] > 0.5) if len(size) >= 4 else True
+            pitch = float(size[4]) if len(size) >= 5 else 2.0
+            d_pitch = (teeth * pitch) / math.pi
+            d_outer = d_pitch - 0.508
+            d_flange = d_outer + 3.0 if flange else d_outer
+            d1 = d2 = d_flange
+            h = w + (2.0 if flange else 0.0)
+        elif prim in ("magnet_pocket", "magnet_hole"):
+            d_mag = float(size[0]) if len(size) >= 1 else 6.0
+            h = float(size[1]) if len(size) >= 2 else 3.0
+            d1 = d2 = d_mag + 0.5
+        elif prim in ("gear", "involute_gear"):
             teeth = float(size[0]) if len(size) >= 1 else 20.0
             mod = float(size[1]) if len(size) >= 2 else 1.5
             d_tip = mod * (teeth + 2.0)

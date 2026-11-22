@@ -25,6 +25,7 @@ PRIMITIVES = {
     "cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull",
     "linear_extrude", "rotate_extrude", "counterbore", "text",
     "thread", "metric_thread", "gear", "involute_gear",
+    "timing_pulley", "gt2_pulley", "snap_joint", "magnet_pocket",
 }
 #: 原语别名 → 标准名
 _ALIAS = {
@@ -33,6 +34,9 @@ _ALIAS = {
     "lathe": "rotate_extrude", "revolve": "rotate_extrude",
     "metric_thread": "thread", "threads": "thread", "screw": "thread", "bolt": "thread", "nut": "thread",
     "involute_gear": "gear", "spur_gear": "gear", "cog": "gear",
+    "gt2_pulley": "timing_pulley", "gt2": "timing_pulley", "pulley": "timing_pulley",
+    "snap_fit": "snap_joint", "cantilever_snap": "snap_joint", "latch": "snap_joint",
+    "magnet_hole": "magnet_pocket", "magnet": "magnet_pocket",
 }
 
 #: ISO / DIN 标准公制螺纹粗牙标准螺距映射 (mm)
@@ -226,6 +230,44 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         bore = _sanitize_num(part.get("bore", part.get("shaft", 5.0)), 5.0)
         pa = _sanitize_num(part.get("pressure_angle", 20.0), 20.0)
         return [teeth, mod, h, bore, pa]
+    if p in ("timing_pulley", "gt2_pulley"):
+        if isinstance(raw, list) and len(raw) >= 2:
+            teeth = _sanitize_num(raw[0], 20.0)
+            w = _sanitize_num(raw[1], 6.0)
+            bore = _sanitize_num(raw[2] if len(raw) >= 3 else 5.0, 5.0)
+            flange = 1.0 if (len(raw) < 4 or raw[3]) else 0.0
+            pitch = _sanitize_num(raw[4] if len(raw) >= 5 else 2.0, 2.0)
+            return [teeth, w, bore, flange, pitch]
+        teeth = _sanitize_num(part.get("teeth", part.get("z", 20.0)), 20.0)
+        w = _sanitize_num(part.get("belt_width", part.get("width", part.get("height", 6.0))), 6.0)
+        bore = _sanitize_num(part.get("bore", part.get("shaft", 5.0)), 5.0)
+        flange = 1.0 if part.get("flange", True) else 0.0
+        pitch = _sanitize_num(part.get("pitch", 2.0), 2.0)
+        return [teeth, w, bore, flange, pitch]
+    if p in ("snap_joint", "snap_fit"):
+        if isinstance(raw, list) and len(raw) >= 3:
+            l = _sanitize_num(raw[0], 12.0)
+            w = _sanitize_num(raw[1], 6.0)
+            t = _sanitize_num(raw[2], 1.5)
+            hook = _sanitize_num(raw[3] if len(raw) >= 4 else 1.0, 1.0)
+            return [l, w, t, hook]
+        l = _sanitize_num(part.get("length", part.get("height", 12.0)), 12.0)
+        w = _sanitize_num(part.get("width", 6.0), 6.0)
+        t = _sanitize_num(part.get("thickness", 1.5), 1.5)
+        hook = _sanitize_num(part.get("hook_depth", part.get("hook", 1.0)), 1.0)
+        return [l, w, t, hook]
+    if p in ("magnet_pocket", "magnet_hole"):
+        if isinstance(raw, list) and len(raw) >= 2:
+            d = _sanitize_num(raw[0], 6.0)
+            depth = _sanitize_num(raw[1], 3.0)
+            tol = _sanitize_num(raw[2] if len(raw) >= 3 else 0.2, 0.2)
+            eject = _sanitize_num(raw[3] if len(raw) >= 4 else 1.5, 1.5)
+            return [d, depth, tol, eject]
+        d = _sanitize_num(part.get("diameter", part.get("d", 6.0)), 6.0)
+        depth = _sanitize_num(part.get("depth", part.get("height", part.get("h", 3.0))), 3.0)
+        tol = _sanitize_num(part.get("clearance", part.get("tolerance", 0.2)), 0.2)
+        eject = _sanitize_num(part.get("ejection_hole", part.get("eject", 1.5)), 1.5)
+        return [d, depth, tol, eject]
     return [10.0, 10.0, 10.0]
 
 

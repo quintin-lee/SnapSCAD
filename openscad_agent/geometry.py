@@ -384,6 +384,104 @@ def _gear_code(size: list[float], center: list[float], holes: list[dict], note: 
     return "\n".join(lines)
 
 
+def _timing_pulley_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """GT2 标准同步轮生成器（支持齿槽、挡边、轴孔）。"""
+    teeth = int(size[0]) if size else 20
+    w = float(size[1]) if len(size) >= 2 else 6.0
+    bore = float(size[2]) if len(size) >= 3 else 5.0
+    flange = bool(size[3] > 0.5) if len(size) >= 4 else True
+    pitch = float(size[4]) if len(size) >= 5 else 2.0
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    d_pitch = (teeth * pitch) / math.pi
+    d_outer = d_pitch - 0.508
+    r_outer = d_outer / 2.0
+    h_flange = 1.0 if flange else 0.0
+    d_flange = d_outer + 3.0 if flange else d_outer
+    total_h = w + 2 * h_flange
+    r_groove = 0.555
+
+    lines = [f"  // {note}" if note else f"  // GT2 timing pulley: {teeth}T w={_fmt(w)}mm bore={_fmt(bore)}mm"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}]) {{")
+    lines.append("    difference() {")
+    lines.append("      union() {")
+    lines.append(f"        cylinder(d = {_fmt(d_outer)}, h = {_fmt(total_h)}, $fn = 64, center = false);")
+    if flange:
+        lines.append(f"        cylinder(d = {_fmt(d_flange)}, h = {_fmt(h_flange)}, $fn = 64, center = false);")
+        lines.append(f"        translate([0, 0, {_fmt(total_h - h_flange)}])")
+        lines.append(f"          cylinder(d = {_fmt(d_flange)}, h = {_fmt(h_flange)}, $fn = 64, center = false);")
+    lines.append("      }")
+    # 弧形齿槽
+    angle_step = 360.0 / teeth
+    lines.append(f"      for (i = [0 : {teeth - 1}]) {{")
+    lines.append(f"        rotate([0, 0, i * {_fmt(angle_step)}])")
+    lines.append(f"          translate([{_fmt(r_outer)}, 0, {_fmt(h_flange - 0.1)}])")
+    lines.append(f"            cylinder(r = {_fmt(r_groove)}, h = {_fmt(w + 0.2)}, $fn = 16, center = false);")
+    lines.append("      }")
+    if bore > 1e-4:
+        lines.append("      translate([0, 0, -1])")
+        lines.append(f"        cylinder(d = {_fmt(bore)}, h = {_fmt(total_h + 2.0)}, $fn = 32, center = false);")
+    lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines)
+
+
+def _snap_joint_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """悬臂梁卡扣生成器（免胶可拆卸卡扣与勾角）。"""
+    l = float(size[0]) if size else 12.0
+    w = float(size[1]) if len(size) >= 2 else 6.0
+    t = float(size[2]) if len(size) >= 3 else 1.5
+    h_hook = float(size[3]) if len(size) >= 4 else 1.0
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    pts = [
+        [0.0, 0.0],
+        [round(t, 4), 0.0],
+        [round(t, 4), round(l, 4)],
+        [round(t + h_hook, 4), round(l, 4)],
+        [round(t, 4), round(l + h_hook, 4)],
+        [0.0, round(l + h_hook, 4)],
+    ]
+    pts_str = json.dumps(pts)
+
+    lines = [f"  // {note}" if note else f"  // cantilever snap joint: L={_fmt(l)} W={_fmt(w)} T={_fmt(t)} Hook={_fmt(h_hook)}"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy - w / 2.0)}, {_fmt(cz)}]) {{")
+    lines.append("    rotate([90, 0, 90])")
+    lines.append(f"      linear_extrude(height = {_fmt(w)}) {{")
+    lines.append(f"        polygon(points = {pts_str});")
+    lines.append("      }")
+    lines.append("  }")
+    return "\n".join(lines)
+
+
+def _magnet_pocket_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """永磁体沉孔底座生成器（作为实体独立部件时的安装座）。"""
+    d = float(size[0]) if size else 6.0
+    depth = float(size[1]) if len(size) >= 2 else 3.0
+    tol = float(size[2]) if len(size) >= 3 else 0.2
+    eject = float(size[3]) if len(size) >= 4 else 1.5
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    eff_d = d + tol
+    outer_d = eff_d + 4.0
+    h_block = depth + 2.0
+
+    lines = [f"  // {note}" if note else f"  // magnet pocket base: d={_fmt(d)}mm depth={_fmt(depth)}mm"]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}]) {{")
+    lines.append("    difference() {")
+    lines.append(f"      cylinder(d = {_fmt(outer_d)}, h = {_fmt(h_block)}, $fn = 32, center = false);")
+    lines.append(f"      translate([0, 0, {_fmt(h_block - depth)}]) {{")
+    lines.append(f"        cylinder(d = {_fmt(eff_d)}, h = {_fmt(depth + 0.1)}, $fn = 32, center = false);")
+    lines.append(f"        translate([0, 0, {_fmt(max(depth - 0.4, 0))}])")
+    lines.append(f"          cylinder(d1 = {_fmt(eff_d)}, d2 = {_fmt(eff_d + 0.8)}, h = 0.5, $fn = 32, center = false);")
+    lines.append("      }")
+    if eject > 1e-4:
+        lines.append("      translate([0, 0, -1])")
+        lines.append(f"        cylinder(d = {_fmt(eject)}, h = {_fmt(h_block + 2.0)}, $fn = 16, center = false);")
+    lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines)
+
+
 PRIMITIVE_BUILDERS = {
     "cube": _cube_code,
     "cuboid": _cube_code,        # LLM 常写 cuboid，等价 cube
@@ -396,6 +494,10 @@ PRIMITIVE_BUILDERS = {
     "metric_thread": _thread_code,
     "gear": _gear_code,
     "involute_gear": _gear_code,
+    "timing_pulley": _timing_pulley_code,
+    "gt2_pulley": _timing_pulley_code,
+    "snap_joint": _snap_joint_code,
+    "magnet_pocket": _magnet_pocket_code,
 }
 
 
@@ -523,12 +625,35 @@ def _counterbore_code(hole: dict[str, Any], center: list[float]) -> list[str]:
     return lines
 
 
+def _magnet_pocket_hole_code(hole: dict[str, Any], center: list[float]) -> list[str]:
+    """生成永磁体压配沉孔与背面退磁顶针孔代码。"""
+    size = hole.get("size") or [6.0, 3.0, 0.2, 1.5]
+    d = float(size[0]) if len(size) >= 1 else 6.0
+    depth = float(size[1]) if len(size) >= 2 else 3.0
+    tol = float(size[2]) if len(size) >= 3 else 0.2
+    eject = float(size[3]) if len(size) >= 4 else 1.5
+    cx, cy, cz = (float(center[i]) for i in range(3))
+    eff_d = d + tol
+    lines = [f"      // 永磁体装配沉孔: d={_fmt(d)}mm(实孔{_fmt(eff_d)}mm) 深={_fmt(depth)}mm, 顶针孔d={_fmt(eject)}mm"]
+    lines.append(f"      translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}]) {{")
+    lines.append(f"        cylinder(d = {_fmt(eff_d)}, h = {_fmt(depth + 0.1)}, $fn = 32, center = false);")
+    lines.append(f"        translate([0, 0, {_fmt(max(depth - 0.4, 0))}])")
+    lines.append(f"          cylinder(d1 = {_fmt(eff_d)}, d2 = {_fmt(eff_d + 0.8)}, h = 0.5, $fn = 32, center = false);")
+    if eject > 1e-4:
+        lines.append(f"        translate([0, 0, -10])")
+        lines.append(f"          cylinder(d = {_fmt(eject)}, h = {_fmt(depth + 10.2)}, $fn = 16, center = false);")
+    lines.append("      }")
+    return lines
+
+
 def _hole_code(hole: dict[str, Any]) -> list[str]:
-    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阶梯沉头孔与阵列）。"""
+    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阶梯沉头孔、强磁沉孔与阵列）。"""
     prim = hole.get("primitive", "cube")
     center = hole.get("center", [0, 0, 0])
     if prim == "counterbore" or hole.get("standard"):
         lines = _counterbore_code(hole, center)
+    elif prim in ("magnet_pocket", "magnet_hole"):
+        lines = _magnet_pocket_hole_code(hole, center)
     else:
         size = _normalize_hole_size(prim, hole)
         body = _part_body(prim, size, center, "hole")
