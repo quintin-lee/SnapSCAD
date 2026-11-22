@@ -1419,6 +1419,59 @@ def test_structured_output_and_robust_json_parsing():
     assert spec["parts"][0]["primitive"] == "cylinder"
 
 
+def test_engineering_priors_and_image_roi_crop():
+    """测试 36: 工业常识规范先验库 (apply_engineering_priors) 与视觉目标 ROI 自动裁剪"""
+    from openscad_agent.spec import apply_engineering_priors
+    from openscad_agent.core import auto_crop_roi, run_cmd
+    import shutil
+
+    # 1. 验证外壳类工程常识先验注入与薄壁加固
+    spec_enclosure = {
+        "name": "rpi_case",
+        "description": "树莓派机箱外壳保护套",
+        "parts": [
+            {
+                "id": "bottom_shell",
+                "primitive": "cube",
+                "size": [85.0, 56.0, 0.4],  # 0.4mm 极端薄壁易断裂
+                "center": [0.0, 0.0, 0.0]
+            }
+        ]
+    }
+    prior_spec, actions = apply_engineering_priors(spec_enclosure, user_hint="树莓派外壳")
+    assert len(actions) >= 2
+    # 验证壁厚参数与公差已注入
+    assert prior_spec["params"]["wall_thickness"] == 2.0
+    assert prior_spec["params"]["fit_clearance"] == 0.25
+    # 验证零件薄壁已被加固至安全阈值 1.6mm
+    assert prior_spec["parts"][0]["size"][2] >= 1.6
+
+    # 2. 验证支架类工程常识先验
+    spec_bracket = {
+        "name": "motor_bracket",
+        "description": "步进电机安装固定支架",
+        "parts": [{"id": "b1", "primitive": "cube", "size": [40, 40, 1.0]}]
+    }
+    b_spec, b_actions = apply_engineering_priors(spec_bracket)
+    assert b_spec["params"]["wall_thickness"] == 3.0
+    assert b_spec["parts"][0]["size"][2] >= 2.5
+
+    # 3. 验证 ImageMagick ROI 自动裁剪
+    magick = shutil.which("magick") or shutil.which("convert")
+    if magick:
+        with tempfile.TemporaryDirectory() as td:
+            src_png = Path(td) / "test_full.png"
+            dst_png = Path(td) / "test_cropped.png"
+            # 生成带大面积白边的色块图片 (200x200 带有中间 50x50 红色块)
+            create_cmd = [magick, "-size", "200x200", "xc:white", "-fill", "red", "-draw", "rectangle 75,75 125,125", str(src_png)]
+            run_cmd(create_cmd)
+            assert src_png.exists()
+
+            cropped = auto_crop_roi(src_png, dst_png)
+            assert cropped.exists()
+            assert cropped.stat().st_size > 0
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1461,6 +1514,7 @@ def run_all_tests() -> bool:
         ("本地零延迟自愈规则库与故障部件定位 (heal_spec_locally)", test_local_healing_and_incremental_patch),
         ("确定性语义锚点与相对几何约束求解器 (resolve_geometric_constraints)", test_geometric_constraint_solver_and_semantic_anchors),
         ("服务端结构化语法约束解码与容错 JSON 解析 (robust_json_loads)", test_structured_output_and_robust_json_parsing),
+        ("工业常识先验规范库与目标 ROI 自动裁剪 (apply_engineering_priors)", test_engineering_priors_and_image_roi_crop),
     ]
 
     all_ok = True
