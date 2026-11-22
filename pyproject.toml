@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snapscad"
-version = "0.2.0"
+version = "1.0.0"
 description = "Turn photos into parametric OpenSCAD 3D models in a snap. Visual Reverse Engineering & AI CAD Agent."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,10 +14,10 @@ authors = [
 ]
 keywords = [
     "openscad", "cad", "reverse-engineering", "3d-printing", "ai",
-    "multimodal", "agent", "stl", "3mf", "dxf", "threejs"
+    "multimodal", "agent", "stl", "3mf", "dxf", "threejs", "gcode", "slicer"
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Manufacturing",
     "Topic :: Scientific/Engineering",
