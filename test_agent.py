@@ -1093,6 +1093,102 @@ def test_patch_api_and_workspace_raycast():
             stop_server()
 
 
+def test_step_and_freecad_interop():
+    """测试 30: 工业级 STEP AP214 实体模型与 FreeCAD 参数化建模脚本导出"""
+    from openscad_agent.interop import export_step_from_stl, export_freecad_script
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+    import ast
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        scad_f = out_dir / "step_demo.scad"
+        scad_f.write_text("cube([20, 15, 10]);\n", encoding="utf-8")
+        stl_f = out_dir / "step_demo.stl"
+        step_f = out_dir / "step_demo.step"
+        fc_f = out_dir / "step_demo_freecad.py"
+
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        renderer.export_model(scad_f, stl_f, force=True)
+        assert stl_f.exists()
+
+        # 1. 验证生成标准 ISO 10303-21 STEP 实体文件
+        res_step = export_step_from_stl(stl_f, out_step=step_f, name="step_demo")
+        assert res_step.exists() and res_step.stat().st_size > 0
+        step_txt = res_step.read_text(encoding="utf-8")
+        assert "ISO-10303-21;" in step_txt
+        assert "MANIFOLD_SOLID_BREP" in step_txt
+        assert "ADVANCED_FACE" in step_txt
+        assert "CLOSED_SHELL" in step_txt
+        assert "END-ISO-10303-21;" in step_txt
+
+        # 2. 验证生成 FreeCAD Python 自动化脚本
+        spec = {
+            "name": "step_demo",
+            "parts": [
+                {"id": "base", "primitive": "cube", "size": [20, 15, 10], "center": [0, 0, 0],
+                 "holes": [{"primitive": "cylinder", "size": [4, 15], "center": [5, 5, 0]}]}
+            ]
+        }
+        res_fc = export_freecad_script(spec, out_script=fc_f)
+        assert res_fc.exists()
+        fc_txt = res_fc.read_text(encoding="utf-8")
+        ast.parse(fc_txt)  # 严格验证 Python 语法合规
+        assert "Part.makeBox" in fc_txt
+        assert "Part.makeCylinder" in fc_txt
+        assert ".cut(" in fc_txt
+        assert "Part.export" in fc_txt
+
+
+def test_structural_stress_doctor_and_step_api():
+    """测试 31: 机械结构力学应力集中深度分析与微服务 STEP 导出 API"""
+    from openscad_agent.doctor import analyze_structural_stress, check_printability
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证紧固孔近壁剪切撕裂预警
+    danger_spec = {
+        "name": "danger_flange",
+        "parts": [
+            {
+                "id": "thin_wall_part",
+                "primitive": "cube",
+                "size": [20.0, 20.0, 8.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [{"primitive": "cylinder", "size": [6.0, 10.0], "center": [7.5, 0.0, 0.0]}],
+            }
+        ]
+    }
+    diag = analyze_structural_stress(danger_spec)
+    assert diag["safety_score"] < 100
+    assert any("剪切撕裂" in w or "穿透" in w or "孔洞边缘" in w for w in diag["structural_warnings"])
+
+    # 2. 验证微服务 POST /api/export_step 端点
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        scad_f = out_dir / "api_step_box.scad"
+        scad_f.write_text("cube([12, 12, 8]);\n", encoding="utf-8")
+        stl_f = out_dir / "api_step_box.stl"
+        from openscad_agent.core import AgentConfig, OpenscadRenderer
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        renderer.export_model(scad_f, stl_f, force=True)
+
+        _, _, port = serve_assets(out_dir, port=8989, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            r = requests.post(f"{base}/api/export_step", json={"stem": "api_step_box"}, timeout=15)
+            assert r.status_code == 200
+            data = r.json()
+            assert data["success"] is True
+            assert (out_dir / "api_step_box.step").exists()
+            assert (out_dir / "api_step_box.step").stat().st_size > 0
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1129,6 +1225,8 @@ def run_all_tests() -> bool:
         ("3D 走丝可视化解析引擎与在线工作台动态回放", test_gcode_stream_and_workspace_visualizer),
         ("参数化规格增量修剪引擎 (patch_spec & apply_patch_to_model)", test_spec_patching_and_hot_reload),
         ("微服务增量修剪 REST API 与工作台 3D 尺寸测距交互", test_patch_api_and_workspace_raycast),
+        ("工业级 STEP AP214 实体模型与 FreeCAD 参数化建模脚本导出", test_step_and_freecad_interop),
+        ("机械结构力学应力集中深度分析与微服务 STEP 导出 API", test_structural_stress_doctor_and_step_api),
     ]
 
     all_ok = True
