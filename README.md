@@ -34,6 +34,7 @@
 ```
 
 设计要点：
+- **本地零延迟自愈规则库与局部差量修补 (`heal_spec_locally` & `patch_spec`)**：当 OpenSCAD 编译校验失败时，系统优先触发内存级确定性规则引擎，自动修正负/零尺寸、清洗 polyhedron 越界索引面、补全退化多边形并剔除装配悬空引用（0ms 瞬间自愈且零 Token 损耗）；若需大模型介入，通过编译器日志与行号精准定位故障部件（`extract_failing_part_id`），仅对出错部件发起局部差量 Patch 修补，杜绝全局重写的幻觉与次生破坏。
 - **几何转译防共面微延展保护 (Automatic Epsilon Offset)**：在进行孔洞布尔挖除与差集切削时，底层几何转译器自动引入 $\varepsilon = 0.05\,\text{mm}$ 微延展扩展，彻底杜绝 OpenSCAD CGAL 经典的共面重叠（Z-fighting）假象以及 0 厚度非流形破面缺陷。
 - **全参数提升与 OpenSCAD Customizer 交互滑块绑定 (Parameter Hoisting)**：自动将零件核心特征尺寸（长宽高、直径、孔径）提升为顶部全局变量，并自动注入规范的 Customizer 滑块注释范围（`// [min:step:max]`），使生成的 `.scad` 代码具备极佳的可视化交互微调能力。
 - **工业级标准 STEP 实体导出 (ISO 10303-21 AP214) 与 FreeCAD B-Rep 建模脚本 (`interop.py`)**：零重型外部依赖、纯原生 Python 算法构建标准的 STEP AP214 几何实体 (`MANIFOLD_SOLID_BREP` + `CLOSED_SHELL` + `POLY_LOOP`)，生成的 `.step` 可直接在 SolidWorks、Autodesk Inventor、Fusion 360、Siemens NX 及 FreeCAD 中作为无损实体特征打开进行二次装配与工程出图；同步输出参数化 FreeCAD Python 脚本，支持在 FreeCAD GUI 或无头 `freecadcmd` 下一键复原几何树与布尔装配。
