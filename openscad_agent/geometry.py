@@ -1072,3 +1072,192 @@ def write_spec_and_scad(
     _log.info("[gen] 规格已写入: %s", spec_path)
     _log.info("[gen] OpenSCAD 源码已写入: %s", scad_path)
     return str(spec_path), str(scad_path), safe
+
+
+# ---------------------------------------------------------------------------
+# 参数化增量修剪与热重载引擎 (Spec Patch & Hot-Reload)
+# ---------------------------------------------------------------------------
+
+def patch_spec(base_spec: dict[str, Any], patch: dict[str, Any] | str) -> dict[str, Any]:
+    """对基础 CAD 模型规格 JSON 应用结构化增量补丁或自然语言修剪指令。
+
+    支持：
+    1. 结构化字典补丁 (Dict Patch):
+       - modify_parts: [{"id": "base", "size": [10, 20, 30], "holes": ...}]
+       - add_parts: [新零件对象]
+       - remove_parts: ["part_id_to_remove"]
+       - scale: float 或 [sx, sy, sz]
+       - params: {"wall_thickness": 3.0}
+    2. 自然语言/启发式文本指令 (Text Rule Patch):
+       - "高度+10" / "高度增加 15mm" / "height + 10" / "拉伸高度到 35"
+       - "孔径 5mm" / "沉孔扩大 1mm" / "孔径改为 4"
+       - "倒角 2mm" / "chamfer 2"
+       - "壁厚 3mm" / "wall_thickness 3"
+       - "缩放 1.5" / "scale 1.2"
+    """
+    import copy
+    import re
+
+    spec = copy.deepcopy(base_spec)
+    parts = spec.setdefault("parts", [])
+
+    if isinstance(patch, str):
+        patch_str = patch.strip()
+
+        # 1. 等比缩放: "缩放 1.5" 或 "scale 1.2"
+        m_scale = re.search(r"(?:缩放|scale|等比缩放)\s*[:=]?\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        if m_scale:
+            s_val = float(m_scale.group(1))
+            for p in parts:
+                if "size" in p and isinstance(p["size"], list):
+                    p["size"] = [round(float(v) * s_val, 3) for v in p["size"]]
+                if "center" in p and isinstance(p["center"], list):
+                    p["center"] = [round(float(v) * s_val, 3) for v in p["center"]]
+
+        # 2. 高度调整: "高度+10", "高度增加 15", "height + 10", "拉伸高度到 35", "高度改为 40"
+        m_h_add = re.search(r"(?:高度|高|height|z轴?)\s*(?:\+|增加|拉长)\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        m_h_set = re.search(r"(?:高度|高|height|z轴?)\s*(?:改为|设为|变为|拉伸到|到|=)\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        if m_h_add:
+            delta = float(m_h_add.group(1))
+            for p in parts:
+                sz = p.get("size", [])
+                if len(sz) >= 3 and p.get("primitive") in ("cube", "chamfer_cube", "rounded_cube"):
+                    sz[2] = round(float(sz[2]) + delta, 3)
+                elif len(sz) >= 2 and p.get("primitive") in ("cylinder", "chamfer_cylinder", "thread"):
+                    sz[1] = round(float(sz[1]) + delta, 3)
+        elif m_h_set:
+            new_h = float(m_h_set.group(1))
+            for p in parts:
+                sz = p.get("size", [])
+                if len(sz) >= 3 and p.get("primitive") in ("cube", "chamfer_cube", "rounded_cube"):
+                    sz[2] = new_h
+                    break
+                elif len(sz) >= 2 and p.get("primitive") in ("cylinder", "chamfer_cylinder", "thread"):
+                    sz[1] = new_h
+                    break
+
+        # 3. 孔径调整: "孔径 5mm", "孔径改为 4.5", "沉孔扩大 1mm", "沉孔直径 6"
+        m_hole_add = re.search(r"(?:孔径|沉孔|孔)\s*(?:\+|扩大|增加)\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        m_hole_dia = re.search(r"(?:孔径|沉孔|孔直径|hole)\s*(?:改为|设为|变为|=|:)?\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        if m_hole_add:
+            d_delta = float(m_hole_add.group(1))
+            for p in parts:
+                for h in p.get("holes", []):
+                    if "size" in h and len(h["size"]) >= 1:
+                        h["size"][0] = round(float(h["size"][0]) + d_delta, 3)
+        elif m_hole_dia:
+            new_d = float(m_hole_dia.group(1))
+            for p in parts:
+                for h in p.get("holes", []):
+                    if "size" in h and len(h["size"]) >= 1:
+                        h["size"][0] = new_d
+
+        # 4. 倒角注入: "倒角 2mm", "chamfer 2"
+        m_chamfer = re.search(r"(?:倒角|chamfer)\s*[:=]?\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        if m_chamfer:
+            c_val = float(m_chamfer.group(1))
+            for p in parts:
+                p["chamfer"] = c_val
+
+        # 5. 壁厚调整: "壁厚 3mm", "wall 2.5"
+        m_wall = re.search(r"(?:壁厚|wall_thickness|wall)\s*[:=]?\s*([0-9.]+)", patch_str, re.IGNORECASE)
+        if m_wall:
+            w_val = float(m_wall.group(1))
+            spec.setdefault("params", {})["wall_thickness"] = w_val
+
+    elif isinstance(patch, dict):
+        if "params" in patch:
+            spec.setdefault("params", {}).update(patch["params"])
+        if "name" in patch:
+            spec["name"] = patch["name"]
+        if "description" in patch:
+            spec["description"] = patch["description"]
+        if "units" in patch:
+            spec["units"] = patch["units"]
+
+        if "modify_parts" in patch:
+            part_map = {p.get("id"): p for p in parts if p.get("id")}
+            for mod in patch["modify_parts"]:
+                pid = mod.get("id")
+                if pid and pid in part_map:
+                    target = part_map[pid]
+                    for k, v in mod.items():
+                        if k != "id":
+                            target[k] = copy.deepcopy(v)
+
+        if "add_parts" in patch:
+            for new_p in patch["add_parts"]:
+                parts.append(copy.deepcopy(new_p))
+
+        if "remove_parts" in patch:
+            rem_ids = set(patch["remove_parts"])
+            spec["parts"] = [p for p in parts if p.get("id") not in rem_ids]
+
+        if "scale" in patch:
+            s = patch["scale"]
+            if isinstance(s, (int, float)):
+                sx = sy = sz = float(s)
+            elif isinstance(s, (list, tuple)) and len(s) >= 3:
+                sx, sy, sz = float(s[0]), float(s[1]), float(s[2])
+            else:
+                sx = sy = sz = 1.0
+
+            for p in spec.get("parts", []):
+                if "size" in p and isinstance(p["size"], list):
+                    if len(p["size"]) >= 3:
+                        p["size"] = [round(p["size"][0] * sx, 3), round(p["size"][1] * sy, 3), round(p["size"][2] * sz, 3)]
+                    elif len(p["size"]) == 2:
+                        p["size"] = [round(p["size"][0] * max(sx, sy), 3), round(p["size"][1] * sz, 3)]
+                if "center" in p and isinstance(p["center"], list) and len(p["center"]) >= 3:
+                    p["center"] = [round(p["center"][0] * sx, 3), round(p["center"][1] * sy, 3), round(p["center"][2] * sz, 3)]
+
+    # 规范化校验
+    validated_spec, _ = validate_spec(spec)
+    return validated_spec
+
+
+def apply_patch_to_model(
+    stem_or_path: str | Path,
+    patch: dict[str, Any] | str,
+    out_dir: Optional[str | Path] = None,
+    recompile: bool = True,
+) -> tuple[Path, Path, dict[str, Any]]:
+    """读取指定模型规格，应用修剪补丁并重新生成 OpenSCAD 源码与 STL。
+
+    返回 (spec_path, scad_path, updated_spec)。
+    """
+    target = Path(stem_or_path)
+    if target.suffix == ".json" and target.exists():
+        spec_path = target
+        working_dir = target.parent if out_dir is None else Path(out_dir)
+        stem = target.stem.replace("_spec", "")
+    else:
+        working_dir = Path(out_dir).resolve() if out_dir else Path.cwd()
+        stem = str(stem_or_path).replace("_spec.json", "").replace(".scad", "").replace(".stl", "")
+        spec_path = working_dir / f"{stem}_spec.json"
+
+    if not spec_path.exists():
+        raise FileNotFoundError(f"找不到模型规格文件: {spec_path}")
+
+    base_spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    updated = patch_spec(base_spec, patch)
+
+    # 回写 spec.json
+    spec_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 转译并回写 scad
+    from .core import AgentConfig, OpenscadRenderer
+    cfg = AgentConfig(output_dir=str(working_dir))
+    scad_code = spec_to_scad(updated, cfg, fn=64, ground_z=True)
+    scad_path = working_dir / f"{stem}.scad"
+    scad_path.write_text(scad_code, encoding="utf-8")
+
+    if recompile:
+        stl_path = working_dir / f"{stem}.stl"
+        renderer = OpenscadRenderer(cfg)
+        ok, msg = renderer.validate(scad_path)
+        if ok:
+            renderer.export_model(scad_path, stl_path, force=True)
+
+    _log.info("[geometry] 增量修剪已应用至模型: %s", stem)
+    return spec_path, scad_path, updated

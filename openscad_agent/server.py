@@ -341,6 +341,31 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        # 5. 交互式规格参数化增量修剪与热重载 (Patch Spec)
+        if clean_path == "/api/patch":
+            stem = body.get("stem", "")
+            instruction = body.get("instruction", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+            if not instruction:
+                self.send_json({"error": "缺少修剪指令 instruction"}, status=400)
+                return
+
+            from .geometry import apply_patch_to_model
+            try:
+                spec_p, scad_p, updated_spec = apply_patch_to_model(stem, instruction, out_dir=out_dir, recompile=True)
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "message": "参数化增量修剪成功并已重新编译 STL",
+                    "spec": updated_spec,
+                    "stl": f"{stem}.stl",
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -432,6 +457,19 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 "message": status.message,
                 "diagnostics": status.diagnostics,
             }
+
+        @app.post("/api/patch")
+        def patch_model_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            instruction = body.get("instruction", "")
+            if not stem or not instruction:
+                raise HTTPException(status_code=400, detail="缺少 stem 或 instruction")
+            from .geometry import apply_patch_to_model
+            try:
+                _, _, updated = apply_patch_to_model(stem, instruction, out_dir=out_dir, recompile=True)
+                return {"success": True, "stem": stem, "spec": updated, "stl": f"{stem}.stl"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
 
         # 挂载静态文件目录供前端视口调用
         app.mount("/", StaticFiles(directory=str(out_dir), html=True), name="static")
