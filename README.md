@@ -34,6 +34,8 @@
 ```
 
 设计要点：
+- **几何转译防共面微延展保护 (Automatic Epsilon Offset)**：在进行孔洞布尔挖除与差集切削时，底层几何转译器自动引入 $\varepsilon = 0.05\,\text{mm}$ 微延展扩展，彻底杜绝 OpenSCAD CGAL 经典的共面重叠（Z-fighting）假象以及 0 厚度非流形破面缺陷。
+- **全参数提升与 OpenSCAD Customizer 交互滑块绑定 (Parameter Hoisting)**：自动将零件核心特征尺寸（长宽高、直径、孔径）提升为顶部全局变量，并自动注入规范的 Customizer 滑块注释范围（`// [min:step:max]`），使生成的 `.scad` 代码具备极佳的可视化交互微调能力。
 - **工业级标准 STEP 实体导出 (ISO 10303-21 AP214) 与 FreeCAD B-Rep 建模脚本 (`interop.py`)**：零重型外部依赖、纯原生 Python 算法构建标准的 STEP AP214 几何实体 (`MANIFOLD_SOLID_BREP` + `CLOSED_SHELL` + `POLY_LOOP`)，生成的 `.step` 可直接在 SolidWorks、Autodesk Inventor、Fusion 360、Siemens NX 及 FreeCAD 中作为无损实体特征打开进行二次装配与工程出图；同步输出参数化 FreeCAD Python 脚本，支持在 FreeCAD GUI 或无头 `freecadcmd` 下一键复原几何树与布尔装配。
 - **机械结构力学应力集中与孔壁撕裂深度体检 (`doctor.py`)**：3D 打印医生系统新增结构力学分析模块 `analyze_structural_stress`，自动计算通孔与外轮廓的最小绝对边距及边径比（预警危险孔壁撕裂并指导外扩/加强筋补偿）；深度辨识零件内凹 90° 直角与拐角阶梯处的应力集中系数（缺口效应预警 $K_t \approx 2.8$ 并推荐过渡圆角 `fillet` 半径）；动态识别细长截面刚度突变，大幅提升工程承载件机械抗疲劳寿命与 3D 打印良品率。
 - **增量 mtime 渲染缓存与工程四视图多线程并发加速**：基于文件时间戳精准判断，已渲染模型与视图在未发生几何改动时实现 0ms 瞬间命中复用；利用 Python `ThreadPoolExecutor` 绕过 GIL 并发调用系统级 OpenSCAD 进程，多视角与工业蓝图渲染提速 60%+，并自动探测注入现代 OpenSCAD 扩展参数 (`--enable=manifold`, `fast-csg`, `lazy-union`)。
