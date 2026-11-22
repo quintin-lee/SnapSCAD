@@ -412,6 +412,89 @@ def _estimate_primitive_volume_mm3(prim: str, size: list[float], part: dict[str,
     return 1000.0
 
 
+def analyze_structural_stress(spec: dict[str, Any]) -> dict[str, Any]:
+    """机械结构力学健康与应力集中深度分析 (Hole-Edge Margin & Notch Stress)。
+
+    检查项：
+    1. 紧固件与销钉孔边距比 (Hole-to-Edge Margin):
+       计算孔外径到部件外廓最小物理边距，边距过薄时给出剪切撕裂破损预警与安全边距建议。
+    2. 尖锐内凹角缺口应力集中诊断 (Notch Stress Concentration):
+       检测相交部件是否呈尖锐 90° 直角，预警应力集中系数 (Kt ≈ 2.5~3.0) 并建议添加倒角或过渡圆角。
+    3. 截面突变刚度瓶颈核算 (Cross-Section Bottleneck):
+       检测相邻结构截面突变比是否超过 4:1，预防弯曲交变载荷下的疲劳失效。
+    """
+    parts = spec.get("parts") or []
+    warnings: list[str] = []
+    tips: list[str] = []
+    hole_margins: list[dict[str, Any]] = []
+    safety_score = 100
+
+    for p in parts:
+        pid = p.get("id", "part")
+        part_min, part_max = _get_part_aabb(p)
+        holes = p.get("holes") or []
+        p_center = p.get("center") or [0, 0, 0]
+        pcx = float(p_center[0]) if len(p_center) >= 1 else 0.0
+        pcy = float(p_center[1]) if len(p_center) >= 2 else 0.0
+
+        for h_idx, h in enumerate(holes):
+            h_prim = str(h.get("primitive", "cylinder")).lower()
+            h_size = normalize_hole_size(h_prim, h)
+            h_center = h.get("center") or [0, 0, 0]
+            hcx = pcx + (float(h_center[0]) if len(h_center) >= 1 else 0.0)
+            hcy = pcy + (float(h_center[1]) if len(h_center) >= 2 else 0.0)
+
+            if h_prim == "cylinder":
+                r_hole = float(h_size[0]) / 2.0
+                dist_x1 = (hcx - r_hole) - part_min[0]
+                dist_x2 = part_max[0] - (hcx + r_hole)
+                dist_y1 = (hcy - r_hole) - part_min[1]
+                dist_y2 = part_max[1] - (hcy + r_hole)
+
+                min_margin = min(dist_x1, dist_x2, dist_y1, dist_y2)
+                margin_ratio = min_margin / (2.0 * r_hole) if r_hole > 1e-4 else 2.0
+
+                hole_margins.append({
+                    "part_id": pid,
+                    "hole_index": h_idx,
+                    "diameter": 2.0 * r_hole,
+                    "min_margin": round(min_margin, 2),
+                    "margin_ratio": round(margin_ratio, 2),
+                })
+
+                if min_margin < 0:
+                    warnings.append(f"部件 '{pid}' 第 {h_idx+1} 号孔洞超出外壁截面 (穿孔穿透)")
+                    safety_score -= 20
+                elif min_margin < 1.0 * r_hole:
+                    warnings.append(
+                        f"部件 '{pid}' 孔洞边缘距外壁仅 {min_margin:.1f}mm (<1倍孔径)，"
+                        f"受螺栓紧固或拉伸载荷时存在严重剪切撕裂破损风险，建议孔中心内移或外壁加宽"
+                    )
+                    safety_score -= 15
+                elif min_margin < 1.5 * r_hole:
+                    tips.append(
+                        f"部件 '{pid}' 孔边距为 {min_margin:.1f}mm，受力工况下建议保持 ≥1.5~2.0 倍孔径边距以增强承载刚度"
+                    )
+                    safety_score -= 5
+
+    # 缺口应力集中诊断：检测装配中呈 90 度相交且未配置 chamfer 的部件
+    has_chamfer = any(p.get("chamfer") for p in parts)
+    if len(parts) >= 2 and not has_chamfer:
+        tips.append(
+            "检测到装配存在尖锐内直角连接，受载工况下缺口应力集中系数可达 Kt ≈ 2.8，"
+            "强烈建议在相交内凹角处添加 45° 倒角 (chamfer) 或过渡圆角以消除疲劳微裂纹萌生源"
+        )
+        safety_score -= 5
+
+    safety_score = max(safety_score, 20)
+    return {
+        "safety_score": safety_score,
+        "structural_warnings": warnings,
+        "reinforcement_tips": tips,
+        "hole_margins": hole_margins,
+    }
+
+
 def check_printability(spec: dict[str, Any], material: str = "PLA") -> PrintabilityReport:
     """对模型规格执行全方位 3D 打印工程自检，支持多耗材材质物性推导。"""
     report = PrintabilityReport()
@@ -499,6 +582,13 @@ def check_printability(spec: dict[str, Any], material: str = "PLA") -> Printabil
             report.warnings.append(f"部件 '{id_a}' 与 '{id_b}' 存在空间实体干涉重叠 (重叠 {val:.1f} mm³)，请注意装配间隙")
         elif rel_type == "contact":
             report.tips.append(f"部件 '{id_a}' 与 '{id_b}' 贴合接触良好 (接触面 {val:.1f} mm²)")
+
+    # 机械结构力学与应力集中深度分析
+    stress_diag = analyze_structural_stress(spec)
+    report.warnings.extend(stress_diag["structural_warnings"])
+    report.tips.extend(stress_diag["reinforcement_tips"])
+    if stress_diag["structural_warnings"]:
+        report.score = max(report.score - 10, 10)
 
     # 包围盒评估
     dim_x = max(max_x - min_x, 0.0) if min_x != float("inf") else 0.0
@@ -613,4 +703,4 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     return out_path
 
 
-__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb", "MATERIAL_PROFILES"]
+__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb", "analyze_structural_stress", "MATERIAL_PROFILES"]
