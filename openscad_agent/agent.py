@@ -75,6 +75,10 @@ class AgentResult:
     print_guide: Optional[str] = None
     #: 生成的独立 HTML 3D 网页交互查看器路径
     viewer_html: Optional[str] = None
+    #: 编译产出的 3D 打印物理切片文件路径 (*.gcode)
+    gcode_path: Optional[str] = None
+    #: 自动化切片物理指标与元数据 (SlicingResult)
+    slicing_result: Optional[Any] = None
     #: 最后一次审查结论（含 match/score/issues/verdict）
     review: Optional[dict[str, Any]] = None
 
@@ -92,6 +96,7 @@ class OpenscadAgent:
         self.enable_multi_view = True              # 是否开启多视角审查
         self.export_3mf: Optional[bool] = None     # GUI 显式 3MF 导出开关 (None=使用 config 默认)
         self.export_2d: Optional[bool] = None      # GUI 显式 2D 投影开关 (None=使用 config 默认)
+        self.auto_slice: Optional[bool] = None     # GUI 显式 G-code 切片开关 (None=使用 config 默认)
         self.last_review: Optional[dict[str, Any]] = None
         self.score_trajectory: list[float] = []   # 审查闭环各轮得分走势
         # 将 GUI 显式开关注入渲染器 (None 时渲染器自动回退 config 值)
@@ -296,12 +301,33 @@ class OpenscadAgent:
             except Exception as e:  # noqa: BLE001
                 _log.warning("[doctor] 生成切片工艺指导书失败: %s", e)
 
+        # 7. 自动化切片物理 G-code 输出 (若启用 auto_slice)
+        gcode_file: Optional[str] = None
+        slicing_res: Optional[Any] = None
+        should_slice = self.auto_slice if self.auto_slice is not None else getattr(self.config, "auto_slice", False)
+        if should_slice and model_file and Path(model_file).exists():
+            try:
+                from .slicer import slice_model, SlicingConfig
+                s_cfg = SlicingConfig(
+                    material=getattr(self.config, "material", "PLA"),
+                    layer_height=getattr(self.config, "slice_layer_height", 0.2),
+                    infill_density=getattr(self.config, "slice_infill", 15),
+                )
+                slicing_res = slice_model(model_file, config=s_cfg)
+                if slicing_res.success:
+                    gcode_file = slicing_res.gcode_path
+                    _log.info("[agent] 已自动完成 3D 打印物理切片: %s (耗时=%s, 耗材=%.1fg)",
+                              Path(gcode_file).name, slicing_res.estimated_time_formatted, slicing_res.filament_weight_grams)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("[agent] 自动化切片失败: %s", e)
+
         _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
             success=True, spec=spec, spec_path=spec_path_str,
             scad_path=str(scad_path), model_file=model_file,
             preview_png=preview_png, viewer_html=viewer_html,
             print_guide=print_guide_file,
+            gcode_path=gcode_file, slicing_result=slicing_res,
             errors=errors, fix_rounds=rounds,
             review_rounds=review_rounds, review=self.last_review,
             score_trajectory=getattr(self, "score_trajectory", []),

@@ -162,6 +162,12 @@ class AgentConfig:
     enable_edge_map: bool = True
     #: 默认 3D 打印推荐耗材类型 (PLA/PETG/ABS/TPU/PC)
     material: str = "PLA"
+    #: 是否自动编译输出 3D 打印物理切片文件 G-code
+    auto_slice: bool = False
+    #: 切片层高 (mm)
+    slice_layer_height: float = 0.2
+    #: 切片填充率 (0-100%)
+    slice_infill: int = 15
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
@@ -769,44 +775,26 @@ def upload_to_3d_printer(
     server_url: str = "http://localhost:7125",
     api_key: str = "",
     timeout: int = 10,
+    printer_type: str = "auto",
+    access_code: str = "",
+    auto_start: bool = False,
 ) -> tuple[bool, str]:
-    """通过 HTTP API 将模型/切片文件一键推送至局域网 3D 打印机 (Klipper/Moonraker 或 OctoPrint)。"""
-    import requests
-    p = Path(file_path).resolve()
-    if not p.exists():
-        return False, f"待上传文件不存在: {p}"
-
-    base = server_url.rstrip("/")
-    if not base.startswith("http://") and not base.startswith("https://"):
-        base = f"http://{base}"
-
-    headers = {}
-    if api_key:
-        headers["X-Api-Key"] = api_key
-
-    # 1. 尝试 Klipper (Moonraker) 端点
-    url_moonraker = f"{base}/server/files/upload"
-    try:
-        with open(p, "rb") as f:
-            resp = requests.post(url_moonraker, files={"file": (p.name, f)}, headers=headers, timeout=timeout)
-        if resp.status_code in (200, 201):
-            _log.info("[printer] 已推送至 Klipper 打印机: %s", p.name)
-            return True, f"已成功推送至 Klipper (Moonraker): {p.name}"
-    except Exception:
-        pass
-
-    # 2. 尝试 OctoPrint 端点
-    url_octo = f"{base}/api/files/local"
-    try:
-        with open(p, "rb") as f:
-            resp = requests.post(url_octo, files={"file": (p.name, f)}, headers=headers, timeout=timeout)
-        if resp.status_code in (200, 201):
-            _log.info("[printer] 已推送至 OctoPrint 打印机: %s", p.name)
-            return True, f"已成功推送至 OctoPrint: {p.name}"
-    except Exception as e:
-        return False, f"无法连接局域网打印机 ({base}): {e}"
-
-    return False, f"打印机服务返回状态码 {resp.status_code}: {resp.text[:150]}"
+    """通过网络协议将模型/切片文件一键推送至局域网 3D 打印机 (Klipper/Moonraker, OctoPrint 或 Bambu Lab)。"""
+    from .dispatcher import DispatchConfig, PrinterDispatcher
+    cfg = DispatchConfig(
+        server_url=server_url,
+        printer_type=printer_type,
+        api_key=api_key,
+        access_code=access_code,
+        auto_start_print=auto_start,
+        timeout=timeout,
+    )
+    dispatcher = PrinterDispatcher(cfg)
+    res = dispatcher.upload_file(file_path)
+    if res.success:
+        return True, res.message
+    diag_str = f" ({'; '.join(res.diagnostics)})" if res.diagnostics else ""
+    return False, f"{res.message}{diag_str}"
 
 
 def spec_to_json(spec: dict[str, Any]) -> str:

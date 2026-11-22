@@ -15,6 +15,8 @@ from .doctor import check_printability, PrintabilityReport, generate_print_guide
 from .gallery import generate_gallery
 from .packager import package_project
 from .server import serve_assets, stop_server, is_port_in_use
+from .slicer import probe_slicers, slice_model, SlicingConfig, SlicingResult, parse_gcode_metadata
+from .dispatcher import PrinterDispatcher, DispatchConfig, DispatchResult
 
 __all__ = [
     "AgentConfig",
@@ -43,4 +45,12 @@ __all__ = [
     "serve_assets",
     "stop_server",
     "is_port_in_use",
+    "probe_slicers",
+    "slice_model",
+    "SlicingConfig",
+    "SlicingResult",
+    "parse_gcode_metadata",
+    "PrinterDispatcher",
+    "DispatchConfig",
+    "DispatchResult",
 ]
