@@ -338,9 +338,18 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <div>尺寸: <span id="hud-dim">-</span></div>
     </div>
     <div class="viewport-tools">
+      <button id="btn-mode-mesh" onclick="switchViewMode('mesh')" style="background:var(--primary);border:1px solid var(--accent)">🧊 实体模型</button>
+      <button id="btn-mode-gcode" onclick="switchViewMode('gcode')" style="background:transparent;border:1px solid var(--border)">🍰 G-code 走丝</button>
       <button onclick="resetCamera()" style="background:transparent;border:1px solid var(--border)">🎯 重置相机</button>
       <button onclick="toggleWireframe()" style="background:transparent;border:1px solid var(--border)">🕸️ 网格模式</button>
       <button onclick="toggleAxes()" style="background:transparent;border:1px solid var(--border)">📐 空间坐标</button>
+    </div>
+    <!-- G-code 逐层走丝控制器 HUD -->
+    <div id="gcode-hud" style="display:none;position:absolute;bottom:70px;left:50%;transform:translateX(-50%);background:rgba(17,24,39,0.92);backdrop-filter:blur(8px);border:1px solid var(--border);padding:8px 16px;border-radius:8px;align-items:center;gap:12px;font-size:0.85rem;z-index:20;">
+      <span style="font-weight:600;color:var(--accent)">🍰 走丝层数:</span>
+      <input type="range" id="gcode-layer-slider" min="1" max="1" value="1" style="width:180px;" oninput="onGcodeLayerChange(this.value)">
+      <span id="gcode-layer-label">1/1</span>
+      <button onclick="toggleGcodePlay()" id="btn-gcode-play" style="padding:4px 10px;font-size:0.8rem;background:var(--primary)">▶ 自动走丝</button>
     </div>
   </div>
 
@@ -360,6 +369,38 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <div class="metric-title">预估打印耗时</div>
         <div id="stat-time" class="metric-val">-</div>
         <div id="stat-filament" style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">耗材: - g</div>
+      </div>
+
+      <!-- 实时双向遥测监视 -->
+      <div class="metric-card" id="card-telemetry">
+        <div class="metric-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>机床实时遥测</span>
+          <button onclick="pollPrinterStatus()" style="padding:2px 8px;font-size:0.72rem;background:transparent;border:1px solid var(--border)">🔄 刷新</button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+          <span id="tel-state" class="status-badge" style="background:#374151;color:#9ca3af">未连接</span>
+          <span id="tel-type" style="font-size:0.75rem;color:var(--text-muted)">-</span>
+        </div>
+        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <div style="background:rgba(0,0,0,0.25);padding:6px;border-radius:4px;">
+            <div style="color:var(--text-muted);font-size:0.7rem">🔥 喷头温度</div>
+            <div id="tel-hotend" style="font-weight:700;color:#f87171;font-size:0.85rem">-- / -- °C</div>
+          </div>
+          <div style="background:rgba(0,0,0,0.25);padding:6px;border-radius:4px;">
+            <div style="color:var(--text-muted);font-size:0.7rem">🛏️ 热床温度</div>
+            <div id="tel-bed" style="font-weight:700;color:#fbbf24;font-size:0.85rem">-- / -- °C</div>
+          </div>
+        </div>
+        <div style="margin-top:8px;font-size:0.75rem;">
+          <div style="display:flex;justify-content:space-between;color:var(--text-muted);margin-bottom:2px;">
+            <span>进度: <strong id="tel-prog-num" style="color:var(--accent)">0%</strong></span>
+            <span id="tel-time">-</span>
+          </div>
+          <div style="height:6px;background:#374151;border-radius:3px;overflow:hidden;">
+            <div id="tel-prog-bar" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s"></div>
+          </div>
+          <div id="tel-file" style="margin-top:4px;color:var(--text-muted);font-size:0.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+        </div>
       </div>
 
       <div class="metric-card">
@@ -393,6 +434,12 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
 let scene, camera, renderer, controls, currentMesh, axesHelper, clipPlane;
 let allModels = [];
 let activeModelStem = "";
+let currentViewMode = 'mesh';
+let gcodeGroup = null;
+let gcodeLayers = [];
+let currentGcodeLayer = 1;
+let isGcodePlaying = false;
+let gcodeTimer = null;
 
 function init3D() {
   const container = document.getElementById('webgl-canvas');
@@ -507,6 +554,13 @@ async function loadModelDetail(stem) {
   activeModelStem = stem;
   document.getElementById('hud-name').innerText = stem;
 
+  if (gcodeGroup) {
+    scene.remove(gcodeGroup);
+    gcodeGroup = null;
+    gcodeLayers = [];
+  }
+  switchViewMode('mesh');
+
   // 更新下载链接
   document.getElementById('btn-dl-stl').href = stem + '.stl';
   document.getElementById('btn-dl-gcode').href = stem + '.gcode';
@@ -522,6 +576,272 @@ async function loadModelDetail(stem) {
 
   // 加载 STL 到 3D 视口
   loadSTL(stem + '.stl');
+}
+
+function switchViewMode(mode) {
+  currentViewMode = mode;
+  const btnMesh = document.getElementById('btn-mode-mesh');
+  const btnGcode = document.getElementById('btn-mode-gcode');
+  const hud = document.getElementById('gcode-hud');
+
+  if (mode === 'mesh') {
+    btnMesh.style.background = 'var(--primary)';
+    btnMesh.style.borderColor = 'var(--accent)';
+    btnGcode.style.background = 'transparent';
+    btnGcode.style.borderColor = 'var(--border)';
+    if (currentMesh) currentMesh.visible = true;
+    if (gcodeGroup) gcodeGroup.visible = false;
+    hud.style.display = 'none';
+    if (isGcodePlaying) toggleGcodePlay();
+  } else {
+    btnGcode.style.background = 'var(--primary)';
+    btnGcode.style.borderColor = 'var(--accent)';
+    btnMesh.style.background = 'transparent';
+    btnMesh.style.borderColor = 'var(--border)';
+    if (currentMesh) currentMesh.visible = false;
+    if (gcodeGroup) {
+      gcodeGroup.visible = true;
+    } else {
+      loadGcodeData(activeModelStem);
+    }
+    hud.style.display = 'flex';
+  }
+}
+
+async function loadGcodeData(stem) {
+  document.getElementById('hud-name').innerText = stem + ' (G-code 走丝)';
+  let gcodeText = '';
+  try {
+    const res = await fetch('/api/model/' + stem + '/gcode');
+    if (res.ok) {
+      gcodeText = await res.text();
+    } else {
+      const resDirect = await fetch(stem + '.gcode');
+      if (resDirect.ok) gcodeText = await resDirect.text();
+    }
+  } catch (e) {
+    console.warn('读取 G-code 异常:', e);
+  }
+
+  if (!gcodeText) {
+    alert('未找到 ' + stem + '.gcode 切片文件。请先点击 "🍰 切片 G-code" 生成切片！');
+    switchViewMode('mesh');
+    return;
+  }
+
+  parseAndRenderGcode(gcodeText);
+}
+
+function parseAndRenderGcode(text) {
+  if (gcodeGroup) scene.remove(gcodeGroup);
+  gcodeGroup = new THREE.Group();
+  gcodeLayers = [];
+
+  const lines = text.split('\n');
+  let curX = 0, curY = 0, curZ = 0, curE = 0;
+  let layerZ = 0;
+  let currentLayerExtrusions = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (!line) continue;
+    const semi = line.indexOf(';');
+    let comment = '';
+    if (semi !== -1) {
+      comment = line.substring(semi);
+      line = line.substring(0, semi).trim();
+    }
+
+    if (comment.includes('LAYER:') || comment.includes('LAYER_CHANGE')) {
+      if (currentLayerExtrusions.length > 0) {
+        gcodeLayers.push({ z: layerZ, segments: currentLayerExtrusions });
+        currentLayerExtrusions = [];
+      }
+    }
+
+    if (!line.startsWith('G0') && !line.startsWith('G1')) continue;
+
+    const parts = line.split(/\\s+/);
+    let nextX = curX, nextY = curY, nextZ = curZ, nextE = curE;
+    let hasMove = false, hasE = false;
+
+    for (let p = 1; p < parts.length; p++) {
+      const code = parts[p][0];
+      const val = parseFloat(parts[p].substring(1));
+      if (isNaN(val)) continue;
+      if (code === 'X' || code === 'x') { nextX = val; hasMove = true; }
+      else if (code === 'Y' || code === 'y') { nextY = val; hasMove = true; }
+      else if (code === 'Z' || code === 'z') {
+        nextZ = val;
+        if (Math.abs(nextZ - curZ) > 0.05 && currentLayerExtrusions.length > 0) {
+          gcodeLayers.push({ z: layerZ, segments: currentLayerExtrusions });
+          currentLayerExtrusions = [];
+        }
+        layerZ = nextZ;
+      }
+      else if (code === 'E' || code === 'e') { nextE = val; hasE = true; }
+    }
+
+    const isExtrude = (hasE && nextE > curE && hasMove);
+    if (hasMove) {
+      currentLayerExtrusions.push({
+        x1: curX, y1: curY, z1: curZ,
+        x2: nextX, y2: nextY, z2: nextZ,
+        extrude: isExtrude
+      });
+    }
+
+    curX = nextX; curY = nextY; curZ = nextZ; curE = nextE;
+  }
+
+  if (currentLayerExtrusions.length > 0) {
+    gcodeLayers.push({ z: layerZ, segments: currentLayerExtrusions });
+  }
+
+  if (gcodeLayers.length === 0) {
+    alert('G-code 走丝解析为空');
+    return;
+  }
+
+  // 构建每层的 LineSegments 几何
+  for (let l = 0; l < gcodeLayers.length; l++) {
+    const lay = gcodeLayers[l];
+    const posExtrude = [];
+    const posTravel = [];
+
+    for (let s = 0; s < lay.segments.length; s++) {
+      const seg = lay.segments[s];
+      if (seg.extrude) {
+        posExtrude.push(seg.x1, seg.y1, seg.z1, seg.x2, seg.y2, seg.z2);
+      } else {
+        posTravel.push(seg.x1, seg.y1, seg.z1, seg.x2, seg.y2, seg.z2);
+      }
+    }
+
+    const layerGroup = new THREE.Group();
+
+    if (posExtrude.length > 0) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(posExtrude, 3));
+      const hue = 0.5 + 0.3 * (l / gcodeLayers.length);
+      const color = new THREE.Color().setHSL(hue, 0.9, 0.55);
+      const mat = new THREE.LineBasicMaterial({ color: color, linewidth: 2 });
+      layerGroup.add(new THREE.LineSegments(geom, mat));
+    }
+
+    if (posTravel.length > 0) {
+      const geomT = new THREE.BufferGeometry();
+      geomT.setAttribute('position', new THREE.Float32BufferAttribute(posTravel, 3));
+      const matT = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.25 });
+      layerGroup.add(new THREE.LineSegments(geomT, matT));
+    }
+
+    gcodeGroup.add(layerGroup);
+    lay.group = layerGroup;
+  }
+
+  scene.add(gcodeGroup);
+
+  const slider = document.getElementById('gcode-layer-slider');
+  slider.min = 1;
+  slider.max = gcodeLayers.length;
+  slider.value = gcodeLayers.length;
+  currentGcodeLayer = gcodeLayers.length;
+  onGcodeLayerChange(slider.value);
+}
+
+function onGcodeLayerChange(val) {
+  currentGcodeLayer = parseInt(val);
+  const total = gcodeLayers.length;
+  const curZ = (gcodeLayers[currentGcodeLayer - 1] ? gcodeLayers[currentGcodeLayer - 1].z : 0).toFixed(2);
+  document.getElementById('gcode-layer-label').innerText = `${currentGcodeLayer}/${total} (Z: ${curZ}mm)`;
+
+  for (let i = 0; i < gcodeLayers.length; i++) {
+    if (gcodeLayers[i].group) {
+      gcodeLayers[i].group.visible = (i < currentGcodeLayer);
+    }
+  }
+}
+
+function toggleGcodePlay() {
+  const btn = document.getElementById('btn-gcode-play');
+  if (isGcodePlaying) {
+    clearInterval(gcodeTimer);
+    isGcodePlaying = false;
+    btn.innerText = '▶ 自动走丝';
+  } else {
+    if (currentGcodeLayer >= gcodeLayers.length) {
+      currentGcodeLayer = 1;
+    }
+    isGcodePlaying = true;
+    btn.innerText = '⏸ 暂停';
+    gcodeTimer = setInterval(() => {
+      currentGcodeLayer++;
+      if (currentGcodeLayer > gcodeLayers.length) {
+        toggleGcodePlay();
+        return;
+      }
+      document.getElementById('gcode-layer-slider').value = currentGcodeLayer;
+      onGcodeLayerChange(currentGcodeLayer);
+    }, 60);
+  }
+}
+
+async function pollPrinterStatus() {
+  const url = document.getElementById('printer-url').value.trim() || 'http://localhost:7125';
+  const ptype = document.getElementById('printer-type').value;
+  const code = document.getElementById('printer-code').value.trim();
+
+  try {
+    const endpoint = `/api/printer/status?server_url=${encodeURIComponent(url)}&printer_type=${ptype}&access_code=${encodeURIComponent(code)}`;
+    const res = await fetch(endpoint);
+    if (!res.ok) return;
+    const st = await res.json();
+
+    const badge = document.getElementById('tel-state');
+    const typeEl = document.getElementById('tel-type');
+    const hotend = document.getElementById('tel-hotend');
+    const bed = document.getElementById('tel-bed');
+    const progNum = document.getElementById('tel-prog-num');
+    const progBar = document.getElementById('tel-prog-bar');
+    const timeEl = document.getElementById('tel-time');
+    const fileEl = document.getElementById('tel-file');
+
+    typeEl.innerText = (st.printer_type || 'klipper').toUpperCase();
+    if (st.online) {
+      badge.innerText = st.state === 'printing' ? '🟢 打印中' : (st.state === 'paused' ? '🟡 已暂停' : '⚪ 就绪空闲');
+      badge.style.background = st.state === 'printing' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(59, 130, 246, 0.2)';
+      badge.style.color = st.state === 'printing' ? '#34d399' : '#60a5fa';
+
+      hotend.innerText = `${st.hotend_temp} / ${st.hotend_target} °C`;
+      bed.innerText = `${st.bed_temp} / ${st.bed_target} °C`;
+
+      const p = Math.min(100, Math.max(0, st.progress || 0));
+      progNum.innerText = `${p.toFixed(1)}%`;
+      progBar.style.width = `${p}%`;
+
+      if (st.time_remaining > 0) {
+        const mins = Math.ceil(st.time_remaining / 60);
+        timeEl.innerText = `剩余约 ${mins} 分钟`;
+      } else {
+        timeEl.innerText = st.print_duration > 0 ? `已打 ${(st.print_duration / 60).toFixed(0)}m` : '-';
+      }
+
+      fileEl.innerText = st.current_file ? `📄 ${st.current_file}` : '';
+    } else {
+      badge.innerText = '🔴 离线未连接';
+      badge.style.background = 'rgba(239, 68, 68, 0.2)';
+      badge.style.color = '#f87171';
+      hotend.innerText = '-- / -- °C';
+      bed.innerText = '-- / -- °C';
+      progNum.innerText = '0%';
+      progBar.style.width = '0%';
+      timeEl.innerText = '主机不可达';
+      fileEl.innerText = st.message || '请检查打印机主机是否通电且局域网可达';
+    }
+  } catch (e) {
+    console.warn('轮询打印机遥测失败:', e);
+  }
 }
 
 function loadSTL(url) {
@@ -648,6 +968,8 @@ async function triggerExportLib() {
 window.onload = function() {
   init3D();
   loadModels();
+  pollPrinterStatus();
+  setInterval(pollPrinterStatus, 5000);
 };
 </script>
 </body>

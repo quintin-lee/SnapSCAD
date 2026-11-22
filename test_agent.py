@@ -878,8 +878,117 @@ def test_cloud_microservice_api_and_workspace():
             }, timeout=10)
             assert r_e.status_code == 200
             assert r_e.json()["success"] is True
+
+            # 9. 验证 GET /api/model/{stem}/gcode (原生 G-code 流)
+            r_g = requests.get(f"{base}/api/model/cloud_cube/gcode", timeout=5)
+            assert r_g.status_code == 200
+            assert "G1" in r_g.text or "G0" in r_g.text or "LAYER" in r_g.text
+
+            # 10. 验证 GET /api/printer/status (遥测代理)
+            r_tel = requests.get(f"{base}/api/printer/status?server_url=http://127.0.0.1:59999&printer_type=klipper", timeout=5)
+            assert r_tel.status_code == 200
+            t_data = r_tel.json()
+            assert "online" in t_data
+            assert t_data["printer_type"] == "klipper"
         finally:
             stop_server()
+
+
+def test_printer_telemetry_and_status():
+    """测试 26: 打印机实时物理遥测解析 (Klipper/OctoPrint/拓竹) 与离线降级"""
+    from openscad_agent.dispatcher import DispatchConfig, PrinterDispatcher, PrinterStatus
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import threading
+
+    # 1. 模拟一个 Moonraker (Klipper) 服务器
+    class MockKlipperHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "printer/objects/query" in self.path:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                data = {
+                    "result": {
+                        "status": {
+                            "heater_bed": {"temperature": 60.1, "target": 60.0},
+                            "extruder": {"temperature": 210.4, "target": 210.0},
+                            "print_stats": {
+                                "state": "printing",
+                                "filename": "bracket.gcode",
+                                "print_duration": 1200,
+                            },
+                            "display_status": {"progress": 0.45},
+                        }
+                    }
+                }
+                self.wfile.write(json.dumps(data).encode("utf-8"))
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), MockKlipperHandler)
+    mock_port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    try:
+        cfg = DispatchConfig(server_url=f"http://127.0.0.1:{mock_port}", printer_type="klipper", timeout=3)
+        disp = PrinterDispatcher(cfg)
+        status = disp.get_printer_status()
+
+        assert status.online is True
+        assert status.state == "printing"
+        assert status.printer_type == "klipper"
+        assert status.hotend_temp == 210.4
+        assert status.bed_temp == 60.1
+        assert status.progress == 45.0
+        assert status.current_file == "bracket.gcode"
+        assert status.print_duration == 1200
+        assert status.time_remaining > 0
+    finally:
+        server.shutdown()
+
+    # 2. 验证离线主机探测 (优雅降级不抛异常)
+    cfg_off = DispatchConfig(server_url="http://127.0.0.1:59998", printer_type="octoprint", timeout=1)
+    disp_off = PrinterDispatcher(cfg_off)
+    st_off = disp_off.get_printer_status()
+    assert st_off.online is False
+    assert st_off.state == "offline"
+    assert len(st_off.diagnostics) > 0
+
+    # 3. 验证拓竹默认状态
+    cfg_bambu = DispatchConfig(server_url="192.168.1.188", printer_type="bambu")
+    disp_bambu = PrinterDispatcher(cfg_bambu)
+    st_bambu = disp_bambu.get_printer_status()
+    assert st_bambu.online is True
+    assert st_bambu.printer_type == "bambu"
+
+
+def test_gcode_stream_and_workspace_visualizer():
+    """测试 27: 3D 走丝可视化解析引擎与在线工作台动态回放"""
+    from openscad_agent.workspace import generate_workspace_html
+
+    with tempfile.TemporaryDirectory() as td:
+        ws_p = generate_workspace_html(td)
+        assert ws_p.exists()
+        txt = ws_p.read_text(encoding="utf-8")
+
+        # 验证 G-code 3D 走丝控制节点
+        assert "btn-mode-gcode" in txt
+        assert "gcode-hud" in txt
+        assert "gcode-layer-slider" in txt
+        assert "toggleGcodePlay" in txt
+        assert "parseAndRenderGcode" in txt
+
+        # 验证机床实时遥测仪表板节点
+        assert "card-telemetry" in txt
+        assert "tel-hotend" in txt
+        assert "tel-bed" in txt
+        assert "tel-prog-bar" in txt
+        assert "pollPrinterStatus" in txt
 
 
 def run_all_tests() -> bool:
@@ -914,6 +1023,8 @@ def run_all_tests() -> bool:
         ("工业级批量并发逆向生产流水线与展厅 G-code 元数据集成", test_batch_pipeline_and_gallery_gcode),
         ("OpenSCAD 模块生态包导出规范 (命名空间与外部库调用)", test_scad_library_exporter),
         ("云原生微服务 REST API 与协同工作台 (Health/Compile/Slice/FastAPI)", test_cloud_microservice_api_and_workspace),
+        ("打印机实时物理遥测解析 (Klipper/OctoPrint/拓竹) 与离线降级", test_printer_telemetry_and_status),
+        ("3D 走丝可视化解析引擎与在线工作台动态回放", test_gcode_stream_and_workspace_visualizer),
     ]
 
     all_ok = True

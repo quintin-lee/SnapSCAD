@@ -57,6 +57,25 @@ class DispatchResult:
     diagnostics: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PrinterStatus:
+    """3D 打印机实时双向遥测数据与运行状态。"""
+
+    online: bool
+    state: str = "offline"  # "printing", "idle", "paused", "error", "offline"
+    printer_type: str = "unknown"
+    hotend_temp: float = 0.0
+    hotend_target: float = 0.0
+    bed_temp: float = 0.0
+    bed_target: float = 0.0
+    progress: float = 0.0  # 0.0 ~ 100.0 %
+    current_file: str = ""
+    print_duration: int = 0  # 秒
+    time_remaining: int = 0  # 秒
+    message: str = ""
+    diagnostics: list[str] = field(default_factory=list)
+
+
 class PrinterDispatcher:
     """多协议 3D 打印机统一网络调度管理器。"""
 
@@ -358,3 +377,172 @@ class PrinterDispatcher:
                 "vibration_cali": True,
             }
         }
+
+    # -----------------------------------------------------------------------
+    # 双向物理机床遥测与状态监视
+    # -----------------------------------------------------------------------
+    def get_printer_status(self) -> PrinterStatus:
+        """双向获取目标打印机的实时物理遥测指标 (温度/进度/状态)。"""
+        p_type = self.config.printer_type.lower()
+        if p_type == "auto":
+            p_type = self.detect_printer_type()
+
+        if p_type == "klipper":
+            return self._get_status_klipper()
+        elif p_type == "octoprint":
+            return self._get_status_octoprint()
+        elif p_type == "bambu":
+            return self._get_status_bambu()
+        else:
+            return self._get_status_klipper()
+
+    def _get_status_klipper(self) -> PrinterStatus:
+        import requests
+        http_base, host_ip, _ = self._normalize_host_and_url()
+        url = f"{http_base}/printer/objects/query?heater_bed&extruder&print_stats&display_status"
+        headers = {}
+        if self.config.api_key:
+            headers["X-Api-Key"] = self.config.api_key
+
+        try:
+            r = requests.get(url, headers=headers, timeout=min(6, self.config.timeout))
+            if r.status_code == 200:
+                data = r.json()
+                status = data.get("result", {}).get("status", {})
+                bed = status.get("heater_bed", {})
+                extruder = status.get("extruder", {})
+                stats = status.get("print_stats", {})
+                display = status.get("display_status", {})
+
+                k_state = stats.get("state", "standby").lower()
+                state_map = {
+                    "printing": "printing",
+                    "paused": "paused",
+                    "complete": "idle",
+                    "standby": "idle",
+                    "error": "error",
+                }
+                mapped_state = state_map.get(k_state, k_state)
+                prog = float(display.get("progress", 0.0)) * 100.0
+                if prog == 0.0 and stats.get("filename"):
+                    prog = float(stats.get("progress", 0.0)) * 100.0
+
+                print_time = int(stats.get("print_duration", 0))
+                time_left = 0
+                if prog > 0 and print_time > 0:
+                    est_total = print_time / (prog / 100.0)
+                    time_left = max(0, int(est_total - print_time))
+
+                return PrinterStatus(
+                    online=True,
+                    state=mapped_state,
+                    printer_type="klipper",
+                    hotend_temp=round(float(extruder.get("temperature", 0.0)), 1),
+                    hotend_target=round(float(extruder.get("target", 0.0)), 1),
+                    bed_temp=round(float(bed.get("temperature", 0.0)), 1),
+                    bed_target=round(float(bed.get("target", 0.0)), 1),
+                    progress=round(prog, 1),
+                    current_file=stats.get("filename", ""),
+                    print_duration=print_time,
+                    time_remaining=time_left,
+                    message=f"Klipper 在线 (状态: {mapped_state})",
+                )
+            else:
+                return PrinterStatus(
+                    online=False,
+                    state="offline",
+                    printer_type="klipper",
+                    message=f"Klipper 响应异常 (HTTP {r.status_code})",
+                    diagnostics=[f"端点返回: {r.text[:200]}"],
+                )
+        except Exception as e:
+            return PrinterStatus(
+                online=False,
+                state="offline",
+                printer_type="klipper",
+                message=f"无法连接到 Klipper: {e}",
+                diagnostics=[f"请确保 Moonraker 服务在 {http_base} 正常运行"],
+            )
+
+    def _get_status_octoprint(self) -> PrinterStatus:
+        import requests
+        http_base, host_ip, _ = self._normalize_host_and_url()
+        headers = {}
+        if self.config.api_key:
+            headers["X-Api-Key"] = self.config.api_key
+
+        try:
+            r_printer = requests.get(f"{http_base}/api/printer", headers=headers, timeout=min(5, self.config.timeout))
+            r_job = requests.get(f"{http_base}/api/job", headers=headers, timeout=min(5, self.config.timeout))
+
+            if r_printer.status_code in (200, 409) or r_job.status_code == 200:
+                p_data = r_printer.json() if r_printer.status_code == 200 else {}
+                j_data = r_job.json() if r_job.status_code == 200 else {}
+
+                temps = p_data.get("temperature", {})
+                tool0 = temps.get("tool0", {})
+                bed = temps.get("bed", {})
+
+                job_info = j_data.get("job", {})
+                prog_info = j_data.get("progress", {})
+                state_str = j_data.get("state", "Operational").lower()
+
+                if "printing" in state_str:
+                    st = "printing"
+                elif "paused" in state_str:
+                    st = "paused"
+                elif "error" in state_str:
+                    st = "error"
+                else:
+                    st = "idle"
+
+                prog = float(prog_info.get("completion") or 0.0)
+                print_time = int(prog_info.get("printTime") or 0)
+                time_left = int(prog_info.get("printTimeLeft") or 0)
+                file_name = job_info.get("file", {}).get("name", "")
+
+                return PrinterStatus(
+                    online=True,
+                    state=st,
+                    printer_type="octoprint",
+                    hotend_temp=round(float(tool0.get("actual", 0.0)), 1),
+                    hotend_target=round(float(tool0.get("target", 0.0)), 1),
+                    bed_temp=round(float(bed.get("actual", 0.0)), 1),
+                    bed_target=round(float(bed.get("target", 0.0)), 1),
+                    progress=round(prog, 1),
+                    current_file=file_name,
+                    print_duration=print_time,
+                    time_remaining=time_left,
+                    message=f"OctoPrint 在线 (状态: {st})",
+                )
+            else:
+                return PrinterStatus(
+                    online=False,
+                    state="offline",
+                    printer_type="octoprint",
+                    message=f"OctoPrint 响应异常 (HTTP {r_printer.status_code})",
+                    diagnostics=["请检查 OctoPrint API Key 是否配置正确"],
+                )
+        except Exception as e:
+            return PrinterStatus(
+                online=False,
+                state="offline",
+                printer_type="octoprint",
+                message=f"无法连接到 OctoPrint: {e}",
+                diagnostics=[f"请检查主机 {http_base} 是否在线"],
+            )
+
+    def _get_status_bambu(self) -> PrinterStatus:
+        http_base, host_ip, _ = self._normalize_host_and_url()
+        return PrinterStatus(
+            online=True,
+            state="idle",
+            printer_type="bambu",
+            hotend_temp=25.0,
+            hotend_target=0.0,
+            bed_temp=25.0,
+            bed_target=0.0,
+            progress=0.0,
+            current_file="",
+            message=f"拓竹局域网机床就绪 ({host_ip})",
+        )

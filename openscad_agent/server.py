@@ -145,9 +145,26 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
             self.send_json(models)
             return
 
-        # 3. 获取单模型详情
+        # 3. 获取单模型详情 或 G-code 原始内容
         if clean_path.startswith("/api/model/"):
-            stem = clean_path.replace("/api/model/", "").strip()
+            rest = clean_path.replace("/api/model/", "").strip()
+            if rest.endswith("/gcode"):
+                stem = rest.replace("/gcode", "").strip()
+                cand_gcode = out_dir / f"{stem}.gcode"
+                if cand_gcode.exists():
+                    data = cand_gcode.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                else:
+                    self.send_json({"error": f"模型 '{stem}' 尚未切片生成 G-code"}, status=404)
+                    return
+
+            stem = rest
             cand_spec = out_dir / f"{stem}_spec.json"
             cand_scad = out_dir / f"{stem}.scad"
             if cand_spec.exists():
@@ -162,7 +179,42 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": f"模型 '{stem}' 不存在"}, status=404)
             return
 
-        # 4. 路由别名跳转
+        # 4. 获取 3D 打印机实时物理遥测指标
+        if clean_path == "/api/printer/status":
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            server_url = qs.get("server_url", ["http://localhost:7125"])[0]
+            printer_type = qs.get("printer_type", ["auto"])[0]
+            api_key = qs.get("api_key", [""])[0]
+            access_code = qs.get("access_code", [""])[0] or api_key
+
+            from .dispatcher import DispatchConfig, PrinterDispatcher
+            cfg = DispatchConfig(
+                server_url=server_url,
+                printer_type=printer_type,
+                api_key=api_key,
+                access_code=access_code,
+            )
+            dispatcher = PrinterDispatcher(cfg)
+            status = dispatcher.get_printer_status()
+            self.send_json({
+                "online": status.online,
+                "state": status.state,
+                "printer_type": status.printer_type,
+                "hotend_temp": status.hotend_temp,
+                "hotend_target": status.hotend_target,
+                "bed_temp": status.bed_temp,
+                "bed_target": status.bed_target,
+                "progress": status.progress,
+                "current_file": status.current_file,
+                "print_duration": status.print_duration,
+                "time_remaining": status.time_remaining,
+                "message": status.message,
+                "diagnostics": status.diagnostics,
+            })
+            return
+
+        # 5. 路由别名跳转
         if clean_path in ("/", "/gallery"):
             self.path = "/gallery.html"
         elif clean_path in ("/workspace", "/work"):
@@ -340,6 +392,46 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 except Exception:
                     pass
             return models
+
+        @app.get("/api/model/{stem}/gcode")
+        def get_model_gcode(stem: str) -> Any:
+            from fastapi.responses import PlainTextResponse, Response
+            cand_gcode = out_dir / f"{stem}.gcode"
+            if cand_gcode.exists():
+                return PlainTextResponse(cand_gcode.read_text(encoding="utf-8"))
+            return Response(content=f"模型 '{stem}' 尚未生成 G-code", status_code=404)
+
+        @app.get("/api/printer/status")
+        def get_printer_status(
+            server_url: str = "http://localhost:7125",
+            printer_type: str = "auto",
+            api_key: str = "",
+            access_code: str = "",
+        ) -> dict[str, Any]:
+            from .dispatcher import DispatchConfig, PrinterDispatcher
+            cfg = DispatchConfig(
+                server_url=server_url,
+                printer_type=printer_type,
+                api_key=api_key or access_code,
+                access_code=access_code or api_key,
+            )
+            dispatcher = PrinterDispatcher(cfg)
+            status = dispatcher.get_printer_status()
+            return {
+                "online": status.online,
+                "state": status.state,
+                "printer_type": status.printer_type,
+                "hotend_temp": status.hotend_temp,
+                "hotend_target": status.hotend_target,
+                "bed_temp": status.bed_temp,
+                "bed_target": status.bed_target,
+                "progress": status.progress,
+                "current_file": status.current_file,
+                "print_duration": status.print_duration,
+                "time_remaining": status.time_remaining,
+                "message": status.message,
+                "diagnostics": status.diagnostics,
+            }
 
         # 挂载静态文件目录供前端视口调用
         app.mount("/", StaticFiles(directory=str(out_dir), html=True), name="static")
