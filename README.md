@@ -34,6 +34,7 @@
 ```
 
 设计要点：
+- **服务端 JSON 结构化语法约束解码与栈式容错解析 (`response_format` & `robust_json_loads`)**：API 交互引入 `response_format={"type": "json_object"}` 强制大模型在 Token 解码阶段锁定合法 JSON 语法（不支持的服务端自动优雅降级）；内置栈式括号追踪算法 `robust_json_loads`，自动清理多余尾逗号并按反序逆向补全因网络中断或 Token 截断导致的未闭合括号，彻底根除 JSON 语法崩溃。
 - **确定性语义锚点与相对几何约束求解器 (`resolve_geometric_constraints`)**：引入声明式装配相对依附语义（`attach_to` / `relative_to` / `face` / `align` / `offset`）与孔系阵列语义（`align: center` / `pattern: 4_corners` / `corner_inset`），由 Python 端包围盒求解器直接闭式推导为绝对空间坐标，彻底摆脱大模型三维浮点空间矩阵心算负担，保证孔位与装配面 100% 精确对齐。
 - **本地零延迟自愈规则库与局部差量修补 (`heal_spec_locally` & `patch_spec`)**：当 OpenSCAD 编译校验失败时，系统优先触发内存级确定性规则引擎，自动修正负/零尺寸、清洗 polyhedron 越界索引面、补全退化多边形并剔除装配悬空引用（0ms 瞬间自愈且零 Token 损耗）；若需大模型介入，通过编译器日志与行号精准定位故障部件（`extract_failing_part_id`），仅对出错部件发起局部差量 Patch 修补，杜绝全局重写的幻觉与次生破坏。
 - **几何转译防共面微延展保护 (Automatic Epsilon Offset)**：在进行孔洞布尔挖除与差集切削时，底层几何转译器自动引入 $\varepsilon = 0.05\,\text{mm}$ 微延展扩展，彻底杜绝 OpenSCAD CGAL 经典的共面重叠（Z-fighting）假象以及 0 厚度非流形破面缺陷。
