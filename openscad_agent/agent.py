@@ -88,7 +88,7 @@ class OpenscadAgent:
         self.renderer = OpenscadRenderer(config)
         self.max_fix_rounds = 3      # 编译错误自动修正上限
         self.max_review_rounds = 3   # 渲染图审查自动修正上限
-        self.review_views = OpenscadRenderer.VIEWS  # 审查时渲染的视角
+        self.review_views = ("top", "front", "side", "iso")  # 审查视角；perspective 与主预览重复，剔除
         self.enable_multi_view = True              # 是否开启多视角审查
         self.export_3mf: Optional[bool] = None     # GUI 显式 3MF 导出开关 (None=使用 config 默认)
         self.export_2d: Optional[bool] = None      # GUI 显式 2D 投影开关 (None=使用 config 默认)
@@ -217,17 +217,12 @@ class OpenscadAgent:
                 if ok:
                     break
             if not ok:
-                ok2, msg2 = self.renderer.validate(scad_path)
-                if ok2:
-                    _log.info("[agent] spec 本身可编译，跳过修复直接渲染")
-                    ok = True
-                    msg = msg2
-                else:
-                    errors.append(f"OpenSCAD 编译校验始终失败:\n{msg}")
-                    return AgentResult(
-                        success=False, spec=spec, spec_path=spec_path_str,
-                        scad_path=str(scad_path), errors=errors, fix_rounds=rounds,
-                    )
+                # 循环退出时 ok/msg 已是最后一次 validate 的结果，无需重复编译
+                errors.append(f"OpenSCAD 编译校验始终失败:\n{msg}")
+                return AgentResult(
+                    success=False, spec=spec, spec_path=spec_path_str,
+                    scad_path=str(scad_path), errors=errors, fix_rounds=rounds,
+                )
 
         # 5. 渲染导出
         model_file: Optional[str] = None
@@ -332,7 +327,7 @@ class OpenscadAgent:
         out_dir = Path(self.config.output_dir)
         max_review = getattr(self, "max_review_rounds", 3)
         # 多视角渲染：除主预览外额外渲 top/front/iso，审查时多角度回传 LLM
-        views = getattr(self, "review_views", OpenscadRenderer.VIEWS)
+        views = getattr(self, "review_views", ("top", "front", "side", "iso"))
         best_spec = spec          # 记录迄今最好的一版（部件数最多且不编译失败）
         best_score = -1.0
 

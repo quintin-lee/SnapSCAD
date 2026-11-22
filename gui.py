@@ -133,9 +133,17 @@ class BuildWorker(QThread):
         self.description = description
         self.hint = hint
         self.review = review
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """协作式取消：在建模子调用边界检查，不中断当前 openscad 子进程。"""
+        self._cancelled = True
 
     def run(self) -> None:
         try:
+            if self._cancelled:
+                self.log_signal.emit("任务已取消")
+                return
             img_desc = (", ".join(Path(p).name for p in self.image) if isinstance(self.image, (list, tuple))
                         else (Path(self.image).name if self.image else "-"))
             self.log_signal.emit(f"开始建模: image={img_desc} desc={self.description or '-'} review={self.review}")
@@ -143,6 +151,9 @@ class BuildWorker(QThread):
                 result = self.agent.build_from_image(self.image, hint=self.hint, review=self.review)
             else:
                 result = self.agent.build_from_description(self.description)
+            if self._cancelled:
+                self.log_signal.emit("任务已取消")
+                return
             self.log_signal.emit(
                 f"建模完成: success={result.success} fix_rounds={result.fix_rounds} review_rounds={getattr(result,'review_rounds',0)}"
             )
@@ -1010,6 +1021,9 @@ class MainWindow(QMainWindow):
         agent.export_3mf = self.chk_3mf.isChecked()  # 3MF 切片同步导出开关
         agent.export_2d = self.chk_2d.isChecked()   # 2D 激光投影 (DXF+SVG) 开关
         review = self.chk_review.isChecked() and bool(image_input)  # 仅图片场景可审查（需原图比对）
+        # 兜底防连点：isRunning 拦截已覆盖主流路径；若旧 worker 残留先标记取消，避免引用被覆盖后失控
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
         self._worker = BuildWorker(agent, image_input, desc, hint, review=review, parent=self)
         self._worker.log_signal.connect(self.log)
         self._worker.done_signal.connect(self.on_done)
@@ -1029,12 +1043,13 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     def on_cancel_build(self) -> None:
-        """安全中止正在执行的后台建模任务。"""
+        """安全中止正在执行的后台建模任务（协作式取消，不强制杀线程）。"""
         if self._worker and self._worker.isRunning():
-            self.log("⚠️ 收到终止指令，正在中止后台任务…")
-            self._worker.terminate()
-            self._worker.wait(800)
-            self._worker = None
+            self.log("⚠️ 收到取消指令，正在取消后台任务…")
+            self._worker.cancel()
+            # 最多等 3s 让当前 openscad 子进程收敛；terminate 会留下孤儿 openscad 进程，
+            # 超时则让 worker 自然结束后由 finished 信号清理。
+            self._worker.wait(3000)
             self.btn_build.setEnabled(True)
             self.btn_cancel.setEnabled(False)
             self.progress.setRange(0, 100)

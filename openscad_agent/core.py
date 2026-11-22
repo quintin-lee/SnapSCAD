@@ -574,9 +574,18 @@ def preprocess_image(src: Path, dst: Path, max_side: int = 2048) -> Path:
             "未找到 ImageMagick (magick/convert)。请安装: sudo pacman -S imagemagick"
         )
 
-    # 读取尺寸，判断是否需要缩放
-    probe = f'identify -format "%w %h" "{src}"'
-    code, out, err = run_cmd(["bash", "-lc", probe])
+    # 读取尺寸，判断是否需要缩放。
+    # argv 列表直调（无 shell 解析），文件名含引号/$() 也不会被解释执行。
+    identify = shutil.which("identify")
+    if identify:
+        probe_cmd = [identify, "-format", "%w %h", str(src)]
+    elif shutil.which("magick"):
+        probe_cmd = ["magick", "identify", "-format", "%w %h", str(src)]
+    else:
+        raise FileNotFoundError(
+            "未找到 ImageMagick (magick/convert)。请安装: sudo pacman -S imagemagick"
+        )
+    code, out, err = run_cmd(probe_cmd)
     if code != 0:
         raise RuntimeError(f"无法读取图片尺寸 {src}: {err.strip()[:300]}")
     w, h = (int(x) for x in out.split())

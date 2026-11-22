@@ -270,7 +270,8 @@ def run_cli_wizard() -> int:
 
     if prov_choice == "2":
         base_url = "http://localhost:11434/v1"
-        model = "qwen2.5-coder:latest"
+        # 与 PROVIDER_PRESETS 一致用 llava（多模态）：向导含图片建模，纯文本模型必然失败
+        model = "llava:latest"
     elif prov_choice == "3":
         base_url = "https://api.openai.com/v1"
         model = "gpt-4o"

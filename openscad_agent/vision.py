@@ -296,6 +296,10 @@ class AgnesVision:
         base = (self.config.base_url or "https://apihub.agnes-ai.com").rstrip("/")
         if base.endswith("/chat/completions"):
             return base
+        # Gemini OpenAI 兼容端点 (…/v1beta/openai) 下直接挂 /chat/completions，
+        # 追加 /v1 会得到 404。
+        if base.endswith("/openai"):
+            return f"{base}/chat/completions"
         if base.endswith("/v1"):
             return f"{base}/chat/completions"
         return f"{base}/v1/chat/completions"

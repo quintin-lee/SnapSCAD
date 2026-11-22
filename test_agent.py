@@ -181,7 +181,7 @@ def test_offline_gateway():
 
     # 端点 URL 规范化测试 (自动消除 /v1 重复)
     v_gemini = AgnesVision(AgentConfig(base_url="https://generativelanguage.googleapis.com/v1beta/openai"))
-    assert v_gemini._endpoint_url() == "https://generativelanguage.googleapis.com/v1beta/openai/v1/chat/completions"
+    assert v_gemini._endpoint_url() == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
     v_v1 = AgnesVision(AgentConfig(base_url="http://localhost:11434/v1"))
     assert v_v1._endpoint_url() == "http://localhost:11434/v1/chat/completions"

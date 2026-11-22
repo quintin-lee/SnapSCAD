@@ -354,11 +354,9 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
     parts = out.get("parts")
     if not isinstance(parts, list):
-        if issues:
-            pass
-        if not isinstance(parts, list) and parts:
+        if parts:
             issues.append("parts 不是 list，已丢弃")
-        out["parts"] = [normalize_part(p, f"part_{i}") for i, p in enumerate(parts or [])]
+        out["parts"] = []
     else:
         out["parts"] = [normalize_part(p, f"part_{i}") for i, p in enumerate(parts)]
 
