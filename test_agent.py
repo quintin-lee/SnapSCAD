@@ -18,8 +18,10 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -622,6 +624,153 @@ def test_metric_calibration_and_multiview():
     assert "Φ" in prompt
 
 
+def test_slicer_engine():
+    """测试 21: 自动化无头切片引擎、拓扑解析、G-code 生成与增量缓存"""
+    from openscad_agent.slicer import (
+        probe_slicers,
+        slice_model,
+        SlicingConfig,
+        parse_gcode_metadata,
+        parse_stl_geometry,
+        MATERIAL_PRESETS,
+    )
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    # 1. 验证切片工具链探测
+    probe = probe_slicers()
+    assert "installed" in probe
+    assert "primary_engine" in probe
+
+    # 2. 导出测试二进制 STL
+    with tempfile.TemporaryDirectory() as td:
+        scad_path = Path(td) / "slice_test.scad"
+        stl_path = Path(td) / "slice_test.stl"
+        gcode_path = Path(td) / "slice_test.gcode"
+        scad_path.write_text("cube([30, 20, 10]);\n", encoding="utf-8")
+
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        renderer.export_model(scad_path, stl_path, force=True)
+        assert stl_path.exists() and stl_path.stat().st_size > 0
+
+        # 3. 验证 STL 拓扑与流形体积解析
+        geom = parse_stl_geometry(stl_path)
+        assert geom["facets"] == 12
+        assert geom["size"] == (30.0, 20.0, 10.0)
+        assert abs(geom["volume_mm3"] - 6000.0) < 50.0  # 30x20x10 = 6000 mm³
+
+        # 4. 执行切片
+        s_cfg = SlicingConfig(material="PETG", layer_height=0.2, infill_density=20)
+        res = slice_model(stl_path, out_gcode=gcode_path, config=s_cfg)
+        assert res.success is True
+        assert res.gcode_path == str(gcode_path)
+        assert gcode_path.exists()
+        assert res.layer_count == 50  # 10mm / 0.2mm
+        assert res.filament_weight_grams > 0.5
+        assert res.estimated_time_minutes > 0.0
+
+        # 5. 校验 G-code 文本合规性 (起始/层高/挤出/温控/结束码)
+        g_text = gcode_path.read_text(encoding="utf-8")
+        assert "G28 ; home all axes" in g_text
+        assert "M140 S80" in g_text or "M190 S80" in g_text  # PETG bed temp 80
+        assert "M104 S240" in g_text or "M109 S240" in g_text  # PETG nozzle temp 240
+        assert ";LAYER:1" in g_text
+        assert ";LAYER:50" in g_text
+        assert "M84 ; disable stepper motors" in g_text
+
+        # 6. 校验元数据反向解析
+        meta = parse_gcode_metadata(gcode_path)
+        assert meta["layer_count"] == 50
+        assert meta["filament_weight_g"] > 0.5
+        assert meta["estimated_time_minutes"] > 0.0
+
+        # 7. 增量缓存测试
+        cached_res = slice_model(stl_path, out_gcode=gcode_path, config=s_cfg, force=False)
+        assert cached_res.slicer_engine == "cached"
+
+
+def test_printer_dispatcher():
+    """测试 22: 多协议 3D 打印机集群调度器 (Klipper/OctoPrint/拓竹 FTPS+MQTT)"""
+    from openscad_agent.dispatcher import PrinterDispatcher, DispatchConfig, DispatchResult
+    from openscad_agent.core import upload_to_3d_printer
+
+    # 1. 验证主机与端口解析
+    cfg = DispatchConfig(server_url="192.168.1.120:7125", printer_type="klipper")
+    disp = PrinterDispatcher(cfg)
+    http_base, host_ip, port = disp._normalize_host_and_url()
+    assert http_base == "http://192.168.1.120:7125"
+    assert host_ip == "192.168.1.120"
+    assert port == 7125
+
+    # 2. 验证拓竹 Bambu Lab MQTT 打印启始指令 JSON 载荷生成
+    payload = disp.generate_bambu_mqtt_payload("gearbox.gcode", bed_type="textured_plate")
+    assert "print" in payload
+    assert payload["print"]["command"] == "project_file"
+    assert payload["print"]["subtask_name"] == "gearbox.gcode"
+    assert payload["print"]["bed_levelling"] is True
+
+    # 3. 验证文件不存在时的优雅拦截与排错指引
+    res = disp.upload_file("non_existent_file.gcode")
+    assert res.success is False
+    assert any("待推送文件不存在" in res.message for _ in [1])
+    assert len(res.diagnostics) > 0
+
+    # 4. 验证网络不通时的诊断信息返回 (短超时测试)
+    with tempfile.NamedTemporaryFile(suffix=".gcode", delete=False) as tf:
+        tf.write(b"; test gcode\nG28\n")
+        tmp_gcode = tf.name
+    try:
+        cfg_offline = DispatchConfig(server_url="http://127.0.0.1:59999", timeout=1, printer_type="klipper")
+        disp_offline = PrinterDispatcher(cfg_offline)
+        res_offline = disp_offline.upload_file(tmp_gcode)
+        assert res_offline.success is False
+        assert len(res_offline.diagnostics) > 0
+
+        # 5. 验证 core.upload_to_3d_printer 向后兼容接口
+        ok, msg = upload_to_3d_printer(tmp_gcode, server_url="http://127.0.0.1:59999", timeout=1)
+        assert ok is False
+        assert "失败" in msg or "127.0.0.1" in msg
+    finally:
+        os.unlink(tmp_gcode)
+
+
+def test_batch_pipeline_and_gallery_gcode():
+    """测试 23: 工业级批量并发逆向生产流水线与展厅 G-code 元数据集成"""
+    from openscad_agent.gallery import generate_gallery
+    from openscad_agent.slicer import slice_model, SlicingConfig
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        # 1. 模拟生成一个已切片的模型产物
+        scad_f = out_dir / "turbine_blade.scad"
+        scad_f.write_text("cylinder(d=20, h=15, $fn=32);\n", encoding="utf-8")
+        stl_f = out_dir / "turbine_blade.stl"
+        gcode_f = out_dir / "turbine_blade.gcode"
+        spec_f = out_dir / "turbine_blade_spec.json"
+        spec_f.write_text(json.dumps({
+            "name": "turbine_blade",
+            "description": "工业燃气轮机高压涡轮叶片",
+            "parts": [{"id": "blade", "primitive": "cylinder", "size": [20, 15], "center": [0,0,0]}],
+        }), encoding="utf-8")
+
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        renderer.export_model(scad_f, stl_f, force=True)
+        # 生成切片 G-code
+        s_res = slice_model(stl_f, out_gcode=gcode_f, config=SlicingConfig(material="ABS", layer_height=0.2))
+        assert gcode_f.exists()
+
+        # 2. 渲染画廊
+        g_html = generate_gallery(out_dir, "gallery.html")
+        assert g_html.exists()
+        html_txt = g_html.read_text(encoding="utf-8")
+        # 检查画廊是否提取了 G-code 下载按钮与切片指标
+        assert "⚡ G-code" in html_txt
+        assert "turbine_blade.gcode" in html_txt
+        assert "turbine_blade" in html_txt
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -649,6 +798,9 @@ def run_all_tests() -> bool:
         ("工业级机械原语与复杂特征库 (公制螺纹与渐开线齿轮)", test_threads_and_gears),
         ("GT2 同步轮与免胶装配结构 (悬臂梁卡扣与强磁沉孔)", test_pulleys_snaps_magnets),
         ("物理基准参照物标尺校准与多视角空间推导", test_metric_calibration_and_multiview),
+        ("自动化切片引擎、拓扑解析、G-code 生成与增量缓存", test_slicer_engine),
+        ("多协议 3D 打印机集群调度器 (Klipper/OctoPrint/拓竹)", test_printer_dispatcher),
+        ("工业级批量并发逆向生产流水线与展厅 G-code 元数据集成", test_batch_pipeline_and_gallery_gcode),
     ]
 
     all_ok = True

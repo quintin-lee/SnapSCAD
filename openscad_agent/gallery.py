@@ -51,10 +51,24 @@ def generate_gallery(output_dir: str | Path, html_filename: str = "gallery.html"
         stl_file = out_dir / f"{stem}.stl"
         mf_file = out_dir / f"{stem}.3mf"
         scad_file = out_dir / f"{stem}.scad"
+        gcode_file = out_dir / f"{stem}.gcode"
 
         doc = check_printability(spec)
         if doc.printable:
             passed_print += 1
+
+        # G-code 切片元数据识别
+        gcode_info_str = ""
+        if gcode_file.exists():
+            try:
+                from .slicer import parse_gcode_metadata
+                g_meta = parse_gcode_metadata(gcode_file)
+                t_m = g_meta.get("estimated_time_minutes", 0.0)
+                w_g = g_meta.get("filament_weight_g", 0.0)
+                t_str = f"{int(t_m)}m" if t_m < 60 else f"{int(t_m // 60)}h{int(t_m % 60)}m"
+                gcode_info_str = f"⚡ {t_str} · {w_g:.1f}g"
+            except Exception:
+                gcode_info_str = "⚡ G-code 就绪"
 
         models.append({
             "name": name,
@@ -75,6 +89,9 @@ def generate_gallery(output_dir: str | Path, html_filename: str = "gallery.html"
             "mf_url": mf_file.name if mf_file.exists() else "",
             "has_scad": scad_file.exists(),
             "scad_url": scad_file.name if scad_file.exists() else "",
+            "has_gcode": gcode_file.exists(),
+            "gcode_url": gcode_file.name if gcode_file.exists() else "",
+            "gcode_info": gcode_info_str,
         })
 
     model_count = len(models)
@@ -94,13 +111,17 @@ def generate_gallery(output_dir: str | Path, html_filename: str = "gallery.html"
         btn_viewer = f'<a href="{html_lib.escape(m["viewer_url"], quote=True)}" target="_blank" class="btn btn-primary">🌐 3D 旋转检视</a>' if m["has_viewer"] else ''
         btn_stl = f'<a href="{html_lib.escape(m["stl_url"], quote=True)}" download class="btn">⬇️ STL</a>' if m["has_stl"] else ''
         btn_3mf = f'<a href="{html_lib.escape(m["mf_url"], quote=True)}" download class="btn">⬇️ 3MF</a>' if m["has_3mf"] else ''
+        btn_gcode = f'<a href="{html_lib.escape(m["gcode_url"], quote=True)}" download class="btn btn-accent" style="color:#38bdf8;border-color:rgba(56,189,248,0.4)">⚡ G-code</a>' if m["has_gcode"] else ''
         btn_scad = f'<a href="{html_lib.escape(m["scad_url"], quote=True)}" download class="btn">💻 SCAD</a>' if m["has_scad"] else ''
+
+        gcode_tag = f'<span class="badge" style="background:#0284c7;color:#fff;right:auto;left:10px;">{html_lib.escape(m["gcode_info"])}</span>' if m["gcode_info"] else ''
 
         cards_html.append(f"""
     <div class="card" data-name="{name_attr}" data-desc="{desc_attr}">
       <div class="card-img-wrap">
         {img_tag}
         <span class="badge {badge_cls}">{m['doc_score']}分</span>
+        {gcode_tag}
       </div>
       <div class="card-body">
         <h3 class="card-title">{name_attr}</h3>
@@ -113,6 +134,7 @@ def generate_gallery(output_dir: str | Path, html_filename: str = "gallery.html"
           {btn_viewer}
           {btn_stl}
           {btn_3mf}
+          {btn_gcode}
           {btn_scad}
         </div>
       </div>

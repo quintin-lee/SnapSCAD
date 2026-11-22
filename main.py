@@ -31,6 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--image", "-i", nargs="+", help="输入图片路径 (支持传入多张多角度照片, 如 -i f.jpg s.jpg)")
     src.add_argument("--describe", "-d", help="文字描述, 无图片场景")
     src.add_argument("--batch-dir", help="批量生产目录: 自动对目录下的所有图片依次执行建模与汇总")
+    p.add_argument("--batch-workers", type=int, default=1, help="批量并发逆向流水线并行工作线程数 (默认 1 单线程, 可设 2~8)")
+    p.add_argument("--slice", action="store_true", help="建模完成后自动调用切片器直出 3D 打印物理 G-code (*.gcode)")
+    p.add_argument("--material", default="PLA", choices=["PLA", "PETG", "ABS", "TPU", "PC"],
+                   help="3D 打印推荐耗材与切片温控模板 (默认 PLA)")
+    p.add_argument("--layer-height", type=float, default=0.2, help="切片打印层高 (mm, 默认 0.2)")
+    p.add_argument("--infill", type=int, default=15, help="切片内部填充率 (0~100%, 默认 15)")
+    p.add_argument("--push-printer", help="建模/切片完成后一键推送到局域网 3D 打印机 (如 http://192.168.1.100:7125 或拓竹 IP)")
 
     p.add_argument("--gallery", action="store_true", help="根据输出目录中的全部模型生成 3D 展厅画廊网页 (gallery.html)")
 
@@ -117,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
         extra_system=args.extra_system,
         export_3mf=not args.no_3mf,
         export_2d=args.export_2d,
+        auto_slice=args.slice,
+        material=args.material,
+        slice_layer_height=args.layer_height,
+        slice_infill=args.infill,
     )
 
     agent = OpenscadAgent(config)
@@ -134,26 +145,47 @@ def main(argv: list[str] | None = None) -> int:
             print(f"⚠️ 批量目录中未找到支持的图片文件: {batch_p}")
             return 1
 
-        print(f"🏭 启动工业化批量生产流水线: 共发现 {len(img_files)} 张待处理图片")
+        workers = max(1, min(args.batch_workers, 16))
+        print(f"🏭 启动工业化批量生产流水线: 共发现 {len(img_files)} 张待处理图片 (并发工作线程={workers})")
         print(f"   输入目录: {batch_p}")
         print(f"   输出目录: {config.output_dir}")
         print("=" * 60)
 
         success_count = 0
         fail_count = 0
-        for idx, img_path in enumerate(img_files, 1):
-            print(f"\n▶ [{idx}/{len(img_files)}] 正在处理: {img_path.name}")
+
+        def process_one(idx_file: tuple[int, Path]) -> tuple[bool, str]:
+            idx, img_p = idx_file
+            print(f"\n▶ [{idx}/{len(img_files)}] 正在处理: {img_p.name}")
             try:
-                res = agent.build_from_image(str(img_path), hint=args.hint, review=not args.no_review)
+                res = agent.build_from_image(str(img_p), hint=args.hint, review=not args.no_review)
                 if res.success:
+                    print(f"   ✅ 成功: {res.spec.get('name') if res.spec else img_p.stem} -> {res.model_file}")
+                    return True, ""
+                else:
+                    err_msg = "; ".join(res.errors)
+                    print(f"   ❌ 失败: {err_msg}")
+                    return False, err_msg
+            except Exception as e:
+                print(f"   ❌ 异常: {e}")
+                return False, str(e)
+
+        if workers > 1 and len(img_files) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                results = list(executor.map(process_one, enumerate(img_files, 1)))
+            for ok, _ in results:
+                if ok:
                     success_count += 1
-                    print(f"   ✅ 成功: {res.spec.get('name') if res.spec else img_path.stem} -> {res.model_file}")
                 else:
                     fail_count += 1
-                    print(f"   ❌ 失败: {'; '.join(res.errors)}")
-            except Exception as e:
-                fail_count += 1
-                print(f"   ❌ 异常: {e}")
+        else:
+            for idx_f in enumerate(img_files, 1):
+                ok, _ = process_one(idx_f)
+                if ok:
+                    success_count += 1
+                else:
+                    fail_count += 1
 
         gpath = generate_gallery(args.output)
         print("\n" + "=" * 60)
@@ -187,6 +219,11 @@ def main(argv: list[str] | None = None) -> int:
             f3mf = Path(result.model_file).with_suffix(".3mf")
             if f3mf.exists():
                 print(f"   3D 模型 (3MF) : {f3mf}")
+        if getattr(result, "gcode_path", None):
+            print(f"   物理切片 G-code: {result.gcode_path}")
+            s_res = getattr(result, "slicing_result", None)
+            if s_res:
+                print(f"   切片工艺指标  : 耗时 {s_res.estimated_time_formatted} | 耗材 {s_res.filament_weight_grams}g ({s_res.filament_length_meters}m) | 层数 {s_res.layer_count}")
         if result.preview_png:
             print(f"   预览图        : {result.preview_png}")
         if result.viewer_html:
@@ -199,6 +236,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"   工程打包 ZIP  : {zpath}")
             except Exception as e:
                 print(f"   打包 ZIP 异常 : {e}")
+        if args.push_printer and (result.gcode_path or result.model_file):
+            target_f = result.gcode_path or result.model_file
+            print(f"   📡 正在推送至打印机: {args.push_printer} ...")
+            try:
+                from openscad_agent.core import upload_to_3d_printer
+                ok_push, push_msg = upload_to_3d_printer(target_f, server_url=args.push_printer)
+                print(f"   {'✅' if ok_push else '❌'} 打印机推送: {push_msg}")
+            except Exception as e:
+                print(f"   ❌ 打印机推送异常: {e}")
         try:
             gpath = generate_gallery(args.output)
             print(f"   3D 展厅画廊   : {gpath}")
