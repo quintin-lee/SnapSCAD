@@ -1235,6 +1235,73 @@ def test_epsilon_anti_coplanar_and_param_hoisting():
         assert ok, f"带参数提升与防共面微延展的 OpenSCAD 编译失败: {msg}"
 
 
+def test_local_healing_and_incremental_patch():
+    """测试 33: 本地零延迟规则自愈引擎 (heal_spec_locally) 与局部部件定位 (extract_failing_part_id)"""
+    from openscad_agent.doctor import heal_spec_locally, extract_failing_part_id
+    from openscad_agent.geometry import patch_spec
+
+    # 1. 验证本地规则库对极端非法规格的 0ms 自愈
+    bad_spec = {
+        "name": "broken_model",
+        "parts": [
+            {
+                "id": "1_bad#id",  # 非法标识符
+                "primitive": "cube",
+                "size": [-10.0, 0.0, 15.0],  # 负数与零尺寸
+            },
+            {
+                "id": "bad_poly",
+                "primitive": "polyhedron",
+                "vertices": [[0,0,0], [10,0,0], [5,10,0], [5,5,10]],
+                "faces": [[0, 1, 2], [0, 1, 9999]]  # 越界顶点索引 9999
+            },
+            {
+                "id": "bad_extrude",
+                "primitive": "linear_extrude",
+                "polygon": [[0,0]]  # 仅 1 个点，不足 3 点
+            }
+        ],
+        "assembly": {
+            "union_parts": ["1_bad#id", "bad_poly", "ghost_nonexistent_part"]  # 含悬空不存在部件
+        }
+    }
+
+    healed_spec, was_fixed, actions = heal_spec_locally(bad_spec, compile_err="ERROR: Parser error")
+    assert was_fixed is True
+    assert len(actions) >= 4
+
+    p0 = healed_spec["parts"][0]
+    assert p0["id"] == "p_1_bad_id"
+    assert p0["size"][0] > 0 and p0["size"][1] > 0
+
+    p1 = healed_spec["parts"][1]
+    assert len(p1["faces"]) == 1  # 越界面已被剔除
+
+    p2 = healed_spec["parts"][2]
+    assert len(p2["polygon"]) >= 3  # 点集已自动补齐
+
+    # 悬空部件已从装配中剔除
+    assert "ghost_nonexistent_part" not in healed_spec["assembly"]["union_parts"]
+
+    # 2. 验证编译器报错部件定位
+    err_text = "WARNING: CGAL error in module arm_bracket, line 45"
+    assert extract_failing_part_id(err_text) == "arm_bracket"
+
+    scad_code = (
+        "module base_plate() { cube([10,10,2]); }\n"
+        "module pillar_mount() {\n"
+        "  translate([0,0,0]) cylinder(d=0, h=0);\n"
+        "}\n"
+    )
+    assert extract_failing_part_id("ERROR: line 3: cylinder dimension error", scad_code) == "pillar_mount"
+
+    # 3. 验证局部 patch 修剪修复
+    patch_data = {"modify_parts": [{"id": "p_1_bad_id", "size": [20.0, 30.0, 40.0]}]}
+    patched = patch_spec(healed_spec, patch_data)
+    assert patched["parts"][0]["size"] == [20.0, 30.0, 40.0]
+    assert len(patched["parts"]) == 3  # 其他部件丝毫不受影响
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1274,6 +1341,7 @@ def run_all_tests() -> bool:
         ("工业级 STEP AP214 实体模型与 FreeCAD 参数化建模脚本导出", test_step_and_freecad_interop),
         ("机械结构力学应力集中深度分析与微服务 STEP 导出 API", test_structural_stress_doctor_and_step_api),
         ("几何转译防共面微延展保护与 Customizer 参数提升引擎", test_epsilon_anti_coplanar_and_param_hoisting),
+        ("本地零延迟自愈规则库与故障部件定位 (heal_spec_locally)", test_local_healing_and_incremental_patch),
     ]
 
     all_ok = True
