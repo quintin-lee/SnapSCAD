@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--material", default="PLA", choices=["PLA", "PETG", "ABS", "TPU", "PC"],
                    help="3D 打印推荐耗材与切片温控模板 (默认 PLA)")
     p.add_argument("--layer-height", type=float, default=0.2, help="切片打印层高 (mm, 默认 0.2)")
-    p.add_argument("--infill", type=int, default=15, help="切片内部填充率 (0~100%, 默认 15)")
+    p.add_argument("--infill", type=int, default=15, help="切片内部填充率 (0~100%%, 默认 15)")
     p.add_argument("--push-printer", help="建模/切片完成后一键推送到局域网 3D 打印机 (如 http://192.168.1.100:7125 或拓竹 IP)")
 
     p.add_argument("--gallery", action="store_true", help="根据输出目录中的全部模型生成 3D 展厅画廊网页 (gallery.html)")
@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-multi-view", action="store_true", help="审查时不做多视角渲染 (默认开启)")
     p.add_argument("--no-3mf", action="store_true", help="跳过同步导出 3MF 格式 (默认同时导出 STL+3MF)")
     p.add_argument("--export-2d", action="store_true", help="同步导出 2D 激光切割投影 (DXF+SVG)")
+    p.add_argument("--export-step", action="store_true", help="同步导出工业级 ISO 10303-21 STEP (AP214) 实体模型与 FreeCAD 脚本")
     p.add_argument("--zip", action="store_true", help="建模完成后一键打包全套工程资产为 ZIP 压缩包 (*_project.zip)")
     p.add_argument("--no-render", action="store_true", help="跳过 3D/预览渲染, 仅生成 .scad")
     p.add_argument("--preview-only", action="store_true", help="仅渲染 2D 预览, 跳过 3D 导出")
@@ -230,6 +231,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   3D 网页查看器 : {result.viewer_html}")
         if result.print_guide:
             print(f"   切片工艺指导  : {result.print_guide}")
+        if args.export_step and result.model_file and Path(result.model_file).suffix.lower() == ".stl":
+            try:
+                from openscad_agent.interop import export_step_from_stl, export_freecad_script
+                st_p = export_step_from_stl(result.model_file)
+                print(f"   STEP 实体模型 : {st_p}")
+                if result.spec:
+                    fc_p = export_freecad_script(result.spec, Path(result.model_file).with_name(f"{Path(result.model_file).stem}_freecad.py"))
+                    print(f"   FreeCAD 脚本  : {fc_p}")
+            except Exception as e:
+                print(f"   STEP 导出异常 : {e}")
         if args.zip and result.scad_path:
             try:
                 zpath = package_project(result.scad_path)

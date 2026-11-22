@@ -198,6 +198,7 @@ class MainWindow(QMainWindow):
             "btn_dxf": "📐 激光切割 DXF",
             "btn_slice": "🍰 切片 G-code",
             "btn_patch": "✍️ 增量修剪",
+            "btn_step": "📐 导出 STEP",
             "btn_export_lib": "📦 导出生态库",
             "btn_zip": "📦 打包工程 ZIP",
             "btn_printer": "🖨️ 发送至打印机",
@@ -235,6 +236,7 @@ class MainWindow(QMainWindow):
             "btn_dxf": "📐 Laser Cut DXF",
             "btn_slice": "🍰 Slice G-code",
             "btn_patch": "✍️ Patch Spec",
+            "btn_step": "📐 Export STEP",
             "btn_export_lib": "📦 Export Library",
             "btn_zip": "📦 Export Project ZIP",
             "btn_printer": "🖨️ Send to 3D Printer",
@@ -748,6 +750,10 @@ class MainWindow(QMainWindow):
         self.btn_patch.clicked.connect(self.on_patch_model)
         act_bar.addWidget(self.btn_patch)
 
+        self.btn_export_step = QPushButton("📐 导出 STEP")
+        self.btn_export_step.clicked.connect(self.on_export_step)
+        act_bar.addWidget(self.btn_export_step)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -848,6 +854,7 @@ class MainWindow(QMainWindow):
         self.btn_export_dxf.setText(d["btn_dxf"])
         self.btn_slice.setText(d["btn_slice"])
         self.btn_patch.setText(d.get("btn_patch", "✍️ 增量修剪"))
+        self.btn_export_step.setText(d.get("btn_step", "📐 导出 STEP"))
         self.btn_export_lib.setText(d["btn_export_lib"])
         self.btn_pack_zip.setText(d["btn_zip"])
         self.btn_send_printer.setText(d["btn_printer"])
@@ -1472,6 +1479,35 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "修剪成功", f"指令 '{cmd}' 已应用！模型已重新编译。")
         except Exception as e:
             QMessageBox.warning(self, "修剪失败", f"增量修剪异常: {e}")
+
+    def on_export_step(self) -> None:
+        """将当前模型导出为工业级标准 ISO 10303-21 STEP 实体模型与 FreeCAD 脚本。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        stl_p = scad_p.with_suffix(".stl")
+        if not stl_p.exists():
+            QMessageBox.information(self, "提示", f"未找到可转换的 STL 文件 ({stl_p.name})。请先渲染导出 3D 模型。")
+            return
+
+        from openscad_agent.interop import export_step_from_stl, export_freecad_script
+        try:
+            step_p = export_step_from_stl(stl_p, out_step=scad_p.with_suffix(".step"), name=scad_p.stem)
+            cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+            if cand_spec.exists():
+                import json
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                export_freecad_script(spec, out_script=scad_p.with_name(f"{scad_p.stem}_freecad.py"))
+            self.log(f"📐 工业级 STEP 模型已导出: {step_p.name}")
+            self._refresh_file_list(scad_p.parent)
+            QMessageBox.information(
+                self, "STEP 导出成功",
+                f"已生成工业级标准 ISO 10303-21 STEP 实体模型:\n{step_p.name}\n\n"
+                f"可直接无缝导入 SolidWorks, Fusion 360, Autodesk Inventor, Siemens NX 与 FreeCAD！"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", f"导出 STEP 异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

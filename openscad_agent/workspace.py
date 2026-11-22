@@ -264,6 +264,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
     <select id="model-select" onchange="onModelChange()"></select>
     <button onclick="triggerCompile()" class="btn-accent">⚡ 重新编译 (F5)</button>
     <button onclick="triggerSlice()">🍰 切片 G-code</button>
+    <button onclick="triggerExportStep()" style="background:#059669">📐 导出 STEP</button>
     <button onclick="triggerExportLib()" style="background:#4b5563">📦 导出生态库</button>
     <a href="/gallery.html" style="color:var(--accent);font-size:0.85rem;text-decoration:none;margin-left:8px;">🏛️ 返回展厅</a>
   </div>
@@ -447,7 +448,9 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <div class="metric-title">资产快速下载</div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
           <a id="btn-dl-stl" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">⬇️ 下载 STL 模型</a>
+          <a id="btn-dl-step" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#34d399;text-decoration:none;font-size:0.85rem">📐 下载 STEP 工业模型</a>
           <a id="btn-dl-gcode" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--accent);text-decoration:none;font-size:0.85rem">⚡ 下载切片 G-code</a>
+          <a id="btn-dl-freecad" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">🐍 下载 FreeCAD 脚本</a>
           <a id="btn-dl-zip" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">📦 打包全套 ZIP</a>
         </div>
       </div>
@@ -712,7 +715,9 @@ async function loadModelDetail(stem) {
 
   // 更新下载链接
   document.getElementById('btn-dl-stl').href = stem + '.stl';
+  document.getElementById('btn-dl-step').href = stem + '.step';
   document.getElementById('btn-dl-gcode').href = stem + '.gcode';
+  document.getElementById('btn-dl-freecad').href = stem + '_freecad.py';
   document.getElementById('btn-dl-zip').href = stem + '_project.zip';
 
   // 读取 SCAD 源码
@@ -1093,6 +1098,29 @@ async function triggerDispatch() {
     }
   } catch (e) {
     alert('推送异常: ' + e);
+  }
+}
+
+async function triggerExportStep() {
+  alert('正在请求微服务生成工业标准 ISO 10303-21 STEP 实体与 FreeCAD 脚本...');
+  try {
+    const res = await fetch('/api/export_step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ 工业级 STEP 实体模型已就绪:\n• ${data.step}\n• ${data.freecad}\n\n已更新右侧面板快速下载直链！`);
+      document.getElementById('btn-dl-step').href = data.step;
+      if (data.freecad) {
+        document.getElementById('btn-dl-freecad').href = data.freecad;
+      }
+    } else {
+      alert('❌ 导出 STEP 失败: ' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('导出异常: ' + e);
   }
 }
 
