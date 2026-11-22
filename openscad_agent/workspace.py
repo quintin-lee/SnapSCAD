@@ -275,6 +275,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
     <div class="panel-tabs">
       <button class="tab-btn active" onclick="switchTab('tab-editor', this)">💻 SCAD 源码</button>
       <button class="tab-btn" onclick="switchTab('tab-params', this)">🎛️ 参数调优</button>
+      <button class="tab-btn" onclick="switchTab('tab-patch', this)">✍️ 增量修剪</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -304,6 +305,21 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <label>剖切截面高度 (Clip Z): <span id="val-clip">全模型</span></label>
         <input type="range" id="param-clip" min="-50" max="150" step="1" value="150" oninput="updateClipZ(this.value)">
       </div>
+    </div>
+
+    <!-- 交互式增量修剪 -->
+    <div id="tab-patch" class="tab-content">
+      <div class="form-group">
+        <label>自然语言红线指令 (Redline Instruction):</label>
+        <textarea id="patch-instruction" style="width:100%;height:100px;background:#0d1117;border:1px solid var(--border);border-radius:6px;color:#e6edf3;padding:8px;font-size:0.85rem;" placeholder="输入修剪指令，如：&#10;• 高度增加 10mm&#10;• 孔径扩大 1mm&#10;• 倒角 2mm&#10;• 等比缩放 1.2"></textarea>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+        <button type="button" onclick="fillPatchSample('高度增加 10mm')" style="background:#1f2937;font-size:0.75rem;padding:3px 8px;">+ 高度+10mm</button>
+        <button type="button" onclick="fillPatchSample('孔径扩大 1mm')" style="background:#1f2937;font-size:0.75rem;padding:3px 8px;">+ 孔径+1mm</button>
+        <button type="button" onclick="fillPatchSample('倒角 2mm')" style="background:#1f2937;font-size:0.75rem;padding:3px 8px;">+ 倒角 2mm</button>
+        <button type="button" onclick="fillPatchSample('等比缩放 1.2')" style="background:#1f2937;font-size:0.75rem;padding:3px 8px;">+ 缩放 1.2x</button>
+      </div>
+      <button onclick="triggerApplyPatch()" class="btn-accent" style="width:100%">⚡ 应用自然语言修剪并热重载</button>
     </div>
 
     <!-- 切片工艺 -->
@@ -337,9 +353,18 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <div>模型: <span id="hud-name" style="color:var(--accent);font-weight:600">-</span></div>
       <div>尺寸: <span id="hud-dim">-</span></div>
     </div>
+    <!-- 3D 尺寸测距 HUD -->
+    <div id="measure-hud" style="display:none;position:absolute;top:12px;right:12px;background:rgba(17,24,39,0.92);backdrop-filter:blur(8px);border:1px solid var(--border);padding:8px 12px;border-radius:6px;font-size:0.8rem;z-index:15;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span style="color:var(--accent);font-weight:600">📏 3D 空间测距</span>
+        <button onclick="clearMeasurement()" style="padding:1px 6px;font-size:0.7rem;background:transparent;border:1px solid var(--border)">清除</button>
+      </div>
+      <div id="measure-result" style="margin-top:4px;color:var(--text)">请在模型表面点击起点...</div>
+    </div>
     <div class="viewport-tools">
       <button id="btn-mode-mesh" onclick="switchViewMode('mesh')" style="background:var(--primary);border:1px solid var(--accent)">🧊 实体模型</button>
       <button id="btn-mode-gcode" onclick="switchViewMode('gcode')" style="background:transparent;border:1px solid var(--border)">🍰 G-code 走丝</button>
+      <button id="btn-measure" onclick="toggleMeasureMode()" style="background:transparent;border:1px solid var(--border)">📏 3D 测距</button>
       <button onclick="resetCamera()" style="background:transparent;border:1px solid var(--border)">🎯 重置相机</button>
       <button onclick="toggleWireframe()" style="background:transparent;border:1px solid var(--border)">🕸️ 网格模式</button>
       <button onclick="toggleAxes()" style="background:transparent;border:1px solid var(--border)">📐 空间坐标</button>
@@ -440,6 +465,10 @@ let gcodeLayers = [];
 let currentGcodeLayer = 1;
 let isGcodePlaying = false;
 let gcodeTimer = null;
+let isMeasureMode = false;
+let measurePoints = [];
+let measureMarkers = [];
+let measureLine = null;
 
 function init3D() {
   const container = document.getElementById('webgl-canvas');
@@ -474,6 +503,23 @@ function init3D() {
 
   // 截面剖切面
   clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 150);
+
+  // 3D 尺寸测距点击事件
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+
+  container.addEventListener('pointerdown', function(e) {
+    if (!isMeasureMode || !currentMesh) return;
+    const rect = container.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(currentMesh);
+    if (intersects.length > 0) {
+      handleMeasureClick(intersects[0].point);
+    }
+  });
 
   window.addEventListener('resize', onWindowResize);
   animate();
@@ -526,6 +572,109 @@ function toggleWireframe() {
 
 function toggleAxes() {
   axesHelper.visible = !axesHelper.visible;
+}
+
+// ---------------------------------------------------------------------------
+// 3D 尺寸测距逻辑
+// ---------------------------------------------------------------------------
+function toggleMeasureMode() {
+  isMeasureMode = !isMeasureMode;
+  const btn = document.getElementById('btn-measure');
+  const hud = document.getElementById('measure-hud');
+  if (isMeasureMode) {
+    btn.style.background = 'var(--primary)';
+    btn.style.borderColor = 'var(--accent)';
+    hud.style.display = 'block';
+    if (measurePoints.length === 0) {
+      document.getElementById('measure-result').innerText = '请在模型表面点击起点...';
+    }
+  } else {
+    btn.style.background = 'transparent';
+    btn.style.borderColor = 'var(--border)';
+    hud.style.display = 'none';
+  }
+}
+
+function handleMeasureClick(pt) {
+  if (measurePoints.length >= 2) {
+    clearMeasurement();
+  }
+
+  measurePoints.push(pt.clone());
+
+  const dotGeom = new THREE.SphereGeometry(1.2, 16, 16);
+  const isFirst = (measurePoints.length === 1);
+  const dotMat = new THREE.MeshBasicMaterial({ color: isFirst ? 0xef4444 : 0x10b981 });
+  const marker = new THREE.Mesh(dotGeom, dotMat);
+  marker.position.copy(pt);
+  scene.add(marker);
+  measureMarkers.push(marker);
+
+  if (measurePoints.length === 1) {
+    document.getElementById('measure-result').innerText = `起点已选: (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)}, ${pt.z.toFixed(1)})\n请点击终点...`;
+  } else if (measurePoints.length === 2) {
+    const p1 = measurePoints[0];
+    const p2 = measurePoints[1];
+    const dist = p1.distanceTo(p2);
+    const dx = Math.abs(p1.x - p2.x);
+    const dy = Math.abs(p1.y - p2.y);
+    const dz = Math.abs(p1.z - p2.z);
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+    const lineMat = new THREE.LineDashedMaterial({ color: 0xfacc15, dashSize: 2, gapSize: 1 });
+    measureLine = new THREE.Line(lineGeom, lineMat);
+    measureLine.computeLineDistances();
+    scene.add(measureLine);
+
+    document.getElementById('measure-result').innerHTML = `<strong>直线: ${dist.toFixed(2)} mm</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">ΔX: ${dx.toFixed(1)} | ΔY: ${dy.toFixed(1)} | ΔZ: ${dz.toFixed(1)} mm</span>`;
+  }
+}
+
+function clearMeasurement() {
+  measurePoints = [];
+  measureMarkers.forEach(m => scene.remove(m));
+  measureMarkers = [];
+  if (measureLine) {
+    scene.remove(measureLine);
+    measureLine = null;
+  }
+  document.getElementById('measure-result').innerText = '请在模型表面点击起点...';
+}
+
+// ---------------------------------------------------------------------------
+// 自然语言修剪指令交互
+// ---------------------------------------------------------------------------
+function fillPatchSample(text) {
+  document.getElementById('patch-instruction').value = text;
+}
+
+async function triggerApplyPatch() {
+  const text = document.getElementById('patch-instruction').value.trim();
+  if (!text) {
+    alert('请输入自然语言修剪指令 (如: 高度增加 10mm, 孔径改为 5mm)');
+    return;
+  }
+  alert('正在向微服务提交参数化增量修剪请求...');
+  try {
+    const res = await fetch('/api/patch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, instruction: text })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert('✅ 增量修剪成功并已重新编译！正在热重载 3D 视口...');
+      const rScad = await fetch(activeModelStem + '.scad?t=' + Date.now());
+      if (rScad.ok) {
+        document.getElementById('scad-editor').value = await rScad.text();
+      }
+      loadSTL(activeModelStem + '.stl?t=' + Date.now());
+    } else {
+      alert('❌ 修剪失败: ' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('请求异常: ' + e);
+  }
 }
 
 // 加载模型列表与当前模型

@@ -991,6 +991,108 @@ def test_gcode_stream_and_workspace_visualizer():
         assert "pollPrinterStatus" in txt
 
 
+def test_spec_patching_and_hot_reload():
+    """测试 28: 参数化规格增量修剪引擎 (patch_spec & apply_patch_to_model)"""
+    from openscad_agent.geometry import patch_spec, apply_patch_to_model
+
+    base_spec = {
+        "name": "base_bracket",
+        "description": "初始支架规格",
+        "parts": [
+            {
+                "id": "base_plate",
+                "primitive": "cube",
+                "size": [50.0, 40.0, 10.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [{"primitive": "cylinder", "size": [4.0, 12.0], "center": [10.0, 10.0, 0.0]}],
+            }
+        ],
+    }
+
+    # 1. 结构化字典补丁测试
+    dict_patch = {
+        "modify_parts": [{"id": "base_plate", "size": [60.0, 45.0, 12.0]}],
+        "add_parts": [{"id": "pin", "primitive": "cylinder", "size": [5.0, 15.0], "center": [0, 0, 12.0]}],
+        "params": {"wall_thickness": 3.0},
+    }
+    spec_v1 = patch_spec(base_spec, dict_patch)
+    assert len(spec_v1["parts"]) == 2
+    assert spec_v1["parts"][0]["size"] == [60.0, 45.0, 12.0]
+    assert spec_v1["params"]["wall_thickness"] == 3.0
+
+    # 2. 自然语言高度增量测试 ("高度增加 10mm")
+    spec_h = patch_spec(base_spec, "高度增加 10mm")
+    assert spec_h["parts"][0]["size"][2] == 20.0
+
+    # 3. 自然语言孔径扩大测试 ("孔径扩大 1mm")
+    spec_hole = patch_spec(base_spec, "孔径扩大 1mm")
+    assert spec_hole["parts"][0]["holes"][0]["size"][0] == 5.0
+
+    # 4. 自然语言倒角测试 ("倒角 2mm")
+    spec_c = patch_spec(base_spec, "倒角 2mm")
+    assert spec_c["parts"][0]["chamfer"] == 2.0
+
+    # 5. 端到端 apply_patch_to_model 热重载编译测试
+    with tempfile.TemporaryDirectory() as td:
+        sp_init = Path(td) / "bracket_spec.json"
+        sp_init.write_text(json.dumps(base_spec), encoding="utf-8")
+
+        sp, sc, updated = apply_patch_to_model(sp_init, "高度增加 5mm", out_dir=td, recompile=True)
+        assert sp.exists() and sc.exists()
+        assert updated["parts"][0]["size"][2] == 15.0
+        assert (Path(td) / "bracket.stl").exists()
+        assert (Path(td) / "bracket.stl").stat().st_size > 0
+
+
+def test_patch_api_and_workspace_raycast():
+    """测试 29: 微服务增量修剪 REST API 与工作台 3D 尺寸测距交互"""
+    from openscad_agent.server import serve_assets, stop_server
+    from openscad_agent.workspace import generate_workspace_html
+    import requests
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        # 准备模型规格
+        spec_f = out_dir / "patch_cube_spec.json"
+        spec_f.write_text(json.dumps({
+            "name": "patch_cube",
+            "description": "修剪测试方块",
+            "parts": [{"id": "box", "primitive": "cube", "size": [20, 20, 10], "center": [0,0,0]}],
+        }), encoding="utf-8")
+        scad_f = out_dir / "patch_cube.scad"
+        scad_f.write_text("cube([20, 20, 10]);\n", encoding="utf-8")
+
+        # 1. 验证工作台包含三维测距与增量修剪节点
+        ws_p = generate_workspace_html(out_dir)
+        txt = ws_p.read_text(encoding="utf-8")
+        assert "tab-patch" in txt
+        assert "patch-instruction" in txt
+        assert "triggerApplyPatch" in txt
+        assert "btn-measure" in txt
+        assert "measure-hud" in txt
+        assert "toggleMeasureMode" in txt
+        assert "raycaster" in txt.lower() or "raycaster" in txt
+
+        # 2. 验证微服务 POST /api/patch 端点
+        _, _, port = serve_assets(out_dir, port=8991, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            r = requests.post(f"{base}/api/patch", json={
+                "stem": "patch_cube",
+                "instruction": "高度增加 15mm",
+            }, timeout=15)
+            assert r.status_code == 200
+            res_data = r.json()
+            assert res_data["success"] is True
+            assert (out_dir / "patch_cube.stl").exists()
+            up_spec = json.loads(spec_f.read_text(encoding="utf-8"))
+            assert up_spec["parts"][0]["size"][2] == 25.0
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1025,6 +1127,8 @@ def run_all_tests() -> bool:
         ("云原生微服务 REST API 与协同工作台 (Health/Compile/Slice/FastAPI)", test_cloud_microservice_api_and_workspace),
         ("打印机实时物理遥测解析 (Klipper/OctoPrint/拓竹) 与离线降级", test_printer_telemetry_and_status),
         ("3D 走丝可视化解析引擎与在线工作台动态回放", test_gcode_stream_and_workspace_visualizer),
+        ("参数化规格增量修剪引擎 (patch_spec & apply_patch_to_model)", test_spec_patching_and_hot_reload),
+        ("微服务增量修剪 REST API 与工作台 3D 尺寸测距交互", test_patch_api_and_workspace_raycast),
     ]
 
     all_ok = True

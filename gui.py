@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
             "btn_gallery": "🏛️ 3D 展厅画廊",
             "btn_dxf": "📐 激光切割 DXF",
             "btn_slice": "🍰 切片 G-code",
+            "btn_patch": "✍️ 增量修剪",
             "btn_export_lib": "📦 导出生态库",
             "btn_zip": "📦 打包工程 ZIP",
             "btn_printer": "🖨️ 发送至打印机",
@@ -233,6 +234,7 @@ class MainWindow(QMainWindow):
             "btn_gallery": "🏛️ 3D Showcase Gallery",
             "btn_dxf": "📐 Laser Cut DXF",
             "btn_slice": "🍰 Slice G-code",
+            "btn_patch": "✍️ Patch Spec",
             "btn_export_lib": "📦 Export Library",
             "btn_zip": "📦 Export Project ZIP",
             "btn_printer": "🖨️ Send to 3D Printer",
@@ -742,6 +744,10 @@ class MainWindow(QMainWindow):
         self.btn_slice.clicked.connect(self.on_slice_model)
         act_bar.addWidget(self.btn_slice)
 
+        self.btn_patch = QPushButton("✍️ 增量修剪")
+        self.btn_patch.clicked.connect(self.on_patch_model)
+        act_bar.addWidget(self.btn_patch)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -841,6 +847,7 @@ class MainWindow(QMainWindow):
         self.btn_gallery.setText(d["btn_gallery"])
         self.btn_export_dxf.setText(d["btn_dxf"])
         self.btn_slice.setText(d["btn_slice"])
+        self.btn_patch.setText(d.get("btn_patch", "✍️ 增量修剪"))
         self.btn_export_lib.setText(d["btn_export_lib"])
         self.btn_pack_zip.setText(d["btn_zip"])
         self.btn_send_printer.setText(d["btn_printer"])
@@ -1434,6 +1441,37 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "切片未完成", f"切片引擎报错:\n{res.error_msg}")
         except Exception as e:
             QMessageBox.warning(self, "切片失败", f"切片异常: {e}")
+
+    def on_patch_model(self) -> None:
+        """交互式自然语言红线指令增量修剪当前模型并热重载。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        stem = scad_p.stem
+
+        cmd, ok = QInputDialog.getText(
+            self, "参数化增量修剪",
+            "请输入自然语言红线指令 (例如: 高度增加 10mm, 孔径扩大 1mm, 倒角 2mm, 等比缩放 1.2):",
+            QLineEdit.EchoMode.Normal, "高度增加 10mm"
+        )
+        if not ok or not cmd.strip():
+            return
+        cmd = cmd.strip()
+
+        from openscad_agent.geometry import apply_patch_to_model
+        try:
+            self.log(f"✍️ 正在应用增量修剪指令: '{cmd}'...")
+            spec_p, scad_p, updated = apply_patch_to_model(stem, cmd, out_dir=scad_p.parent, recompile=True)
+            self._scad_path = str(scad_p)
+            self.code_edit.setPlainText(scad_p.read_text(encoding="utf-8"))
+            stl_p = scad_p.with_suffix(".stl")
+            if stl_p.exists() and hasattr(self, "_render_3d_preview"):
+                self._render_3d_preview(stl_p)
+            self.log(f"✅ 模型增量修剪成功并已热重载: {stem}")
+            QMessageBox.information(self, "修剪成功", f"指令 '{cmd}' 已应用！模型已重新编译。")
+        except Exception as e:
+            QMessageBox.warning(self, "修剪失败", f"增量修剪异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""
