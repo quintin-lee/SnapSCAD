@@ -1189,6 +1189,52 @@ def test_structural_stress_doctor_and_step_api():
             stop_server()
 
 
+def test_epsilon_anti_coplanar_and_param_hoisting():
+    """测试 32: 几何转译防共面微延展保护 (Epsilon Offset) 与参数提升引擎 (Customizer Hoisting)"""
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    # 1. 验证没有显式 params 时的自动参数提升 (Hoisting)
+    spec_auto = {
+        "name": "auto_hoist_box",
+        "description": "无参数硬编码零件，验证参数自动提升",
+        "parts": [
+            {
+                "id": "main_body",
+                "primitive": "cube",
+                "size": [60.0, 40.0, 15.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [
+                    {"primitive": "cylinder", "size": [8.0, 15.0], "center": [15.0, 10.0, 0.0]}
+                ]
+            }
+        ],
+        "assembly": {"union_parts": ["main_body"]}
+    }
+
+    scad_code = spec_to_scad(spec_auto, fn=32)
+    # 验证防共面微延展常数与说明
+    assert "epsilon = 0.05;" in scad_code
+    # 验证孔洞带防共面微延展 (cz - 0.05, h + 2 * 0.05 = 15.1)
+    assert "防共面" in scad_code
+    assert "15.1" in scad_code
+    # 验证关键尺寸被提升为 Customizer 交互滑块参数
+    assert "/* [Parameters] */" in scad_code
+    assert "main_body_x = 60;" in scad_code or "main_body_x = 60.0;" in scad_code
+    assert "main_body_y = 40;" in scad_code or "main_body_y = 40.0;" in scad_code
+    assert "main_body_z = 15;" in scad_code or "main_body_z = 15.0;" in scad_code
+    assert "main_body 长度 (X)" in scad_code
+
+    # 2. 真实 OpenSCAD CGAL 编译验证
+    with tempfile.TemporaryDirectory() as td:
+        scad_f = Path(td) / "hoist_demo.scad"
+        scad_f.write_text(scad_code, encoding="utf-8")
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        ok, msg = renderer.validate(scad_f)
+        assert ok, f"带参数提升与防共面微延展的 OpenSCAD 编译失败: {msg}"
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1227,6 +1273,7 @@ def run_all_tests() -> bool:
         ("微服务增量修剪 REST API 与工作台 3D 尺寸测距交互", test_patch_api_and_workspace_raycast),
         ("工业级 STEP AP214 实体模型与 FreeCAD 参数化建模脚本导出", test_step_and_freecad_interop),
         ("机械结构力学应力集中深度分析与微服务 STEP 导出 API", test_structural_stress_doctor_and_step_api),
+        ("几何转译防共面微延展保护与 Customizer 参数提升引擎", test_epsilon_anti_coplanar_and_param_hoisting),
     ]
 
     all_ok = True
