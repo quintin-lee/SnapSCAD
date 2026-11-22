@@ -366,6 +366,40 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 6. 工业级 STEP 实体与 FreeCAD 参数化建模脚本导出 (Export STEP)
+        if clean_path == "/api/export_step":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+
+            stl_file = out_dir / f"{stem}.stl"
+            if not stl_file.exists():
+                self.send_json({"error": f"未找到可转换的 STL 实体: {stem}.stl，请先完成渲染"}, status=404)
+                return
+
+            from .interop import export_step_from_stl, export_freecad_script
+            try:
+                step_file = out_dir / f"{stem}.step"
+                export_step_from_stl(stl_file, out_step=step_file, name=stem)
+
+                cand_spec = out_dir / f"{stem}_spec.json"
+                freecad_file = out_dir / f"{stem}_freecad.py"
+                if cand_spec.exists():
+                    spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    export_freecad_script(spec, out_script=freecad_file)
+
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "step": step_file.name,
+                    "freecad": freecad_file.name if freecad_file.exists() else "",
+                    "message": "工业级标准 STEP 实体模型已生成",
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -468,6 +502,27 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
             try:
                 _, _, updated = apply_patch_to_model(stem, instruction, out_dir=out_dir, recompile=True)
                 return {"success": True, "stem": stem, "spec": updated, "stl": f"{stem}.stl"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/export_step")
+        def export_step_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            stl_file = out_dir / f"{stem}.stl"
+            if not stl_file.exists():
+                raise HTTPException(status_code=404, detail=f"未找到 STL 文件: {stem}.stl")
+            from .interop import export_step_from_stl, export_freecad_script
+            try:
+                step_file = out_dir / f"{stem}.step"
+                export_step_from_stl(stl_file, out_step=step_file, name=stem)
+                cand_spec = out_dir / f"{stem}_spec.json"
+                fc_file = out_dir / f"{stem}_freecad.py"
+                if cand_spec.exists():
+                    spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    export_freecad_script(spec, out_script=fc_file)
+                return {"success": True, "stem": stem, "step": step_file.name, "freecad": fc_file.name}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
