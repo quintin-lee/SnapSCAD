@@ -37,6 +37,8 @@
 - **增量 mtime 渲染缓存与工程四视图多线程并发加速**：基于文件时间戳精准判断，已渲染模型与视图在未发生几何改动时实现 0ms 瞬间命中复用；利用 Python `ThreadPoolExecutor` 绕过 GIL 并发调用系统级 OpenSCAD 进程，多视角与工业蓝图渲染提速 60%+，并自动探测注入现代 OpenSCAD 扩展参数 (`--enable=manifold`, `fast-csg`, `lazy-union`)。
 - **ISO 标准公制内外螺纹生成器 (`thread`)**：采用数学闭式解析与无缝流形拓扑算法，直接生成 100% 封闭无自交的螺纹单 `polyhedron` 实体；支持外螺纹螺栓、内螺纹六角螺母套筒、标准螺距自动查表、两端 45° 机械导入倒角与 FDM 3D 打印热胀冷缩间隙补偿。
 - **工业级渐开线齿轮构建器 (`gear`)**：原生支持模数 (`module`)、齿数 (`teeth`)、压力角 (`pressure_angle`)，基于 2D 渐开线极坐标方程生成精准齿廓，自带中心传动轴孔与标准键槽/D轴防滑切口。
+- **OpenSCAD 模块生态包导出 (`export_scad_library`)**：一键将逆向出的零件封装为带命名空间隔离的标准化 `.scad` 库函数（`snapscad_<model>_<part>`），自动暴露尺寸、缩放比与间隙入参，并配套生成 `example.scad`、`README.md` 与生态归档 ZIP 包，外部工程直接 `use <model_lib.scad>;` 即可开箱调用。
+- **云原生 REST API 微服务与交互协同工作台 (`workspace.html`)**：提供无状态 REST API 微服务（支持 `/api/compile` 动态重编译、`/api/slice` 在线切片、`/api/dispatch` 机群推送），并支持云原生 FastAPI 容器化部署；配套现代化 3D WebGL 交互协同工作台，集成实时源码编辑、参数微调滑块与 1 键投递机床。
 - **无头切片引擎与工业级 G-code 直出 (`slicer.py`)**：双级切片引擎架构，自动探测系统安装的 OrcaSlicer / PrusaSlicer / BambuStudio 并直连调用；内置零重型依赖、极速确定性的 `BuiltinGcodeGenerator`，自动解析 STL 实体拓扑与流形体积，输出包含首层引线、交叉网格填充、周长壁层、精细回抽与热床/喷嘴温控的标准 RepRap/Klipper G-code，并反向解析打印耗时、耗材线长与克重。
 - **全协议 3D 打印机机群网络调度器 (`dispatcher.py`)**：统一支持 Klipper (Moonraker) REST API、OctoPrint REST API 与拓竹 (Bambu Lab X1/P1/A1) 局域网 FTPS (TLS 990/21) 安全上传与 LAN MQTT 打印开工协议，一键从设计直推机床并附带完备排错诊断指引。
 - **并发批量逆向产线与展厅切片看板**：CLI `--batch-dir` 升级支持 `--batch-workers` 多线程并发生产调度，配合 `--slice` 自动直出 G-code，展厅画廊自动展示各模型真实切片耗时、耗材克重与 G-code 直链下载。
@@ -77,7 +79,7 @@
 - **局域网 3D 打印机一键直发**：GUI 操作栏集成打印机直连推送，原生适配 Klipper (Moonraker) 与 OctoPrint 网络切片直传。
 - **桌面布局持久化记忆**：窗口尺寸、位置与三栏分割比例自动记忆恢复。
 - **3D 立体文字与铭牌浮雕**：支持 `text` 原语，一键生成带字号、对齐与深度的 3D 浮雕与凹槽刻字标牌。
-- **自动化质量基准测试套件**：内置 `test_agent.py`，支持 `main.py --test` 一键全自动化执行 23 大核心工程质量基准自检套件 (100% 通过)。
+- **自动化质量基准测试套件**：内置 `test_agent.py`，支持 `main.py --test` 一键全自动化执行 25 大核心工程质量基准自检套件 (100% 通过)。
 - **GUI 国际化双语切换**：界面支持简体中文 / English 实时无缝热切，自动持久化语言偏好。
 - **GUI 原生内嵌 3D 实时交互视口**：PyQt6 桌面客户端在 2D 静态工程图与 3D 交互视口间无缝热切（`🎮 3D 交互视口`），无需切换外部浏览器即可直接在主窗口执行 360° 旋转、缩放平移、剖切与测量，同时具备 WebEngine 环境探测与优雅回退。
 - **真实物理正交三视图与等轴测**：集成真实相机参数矩阵（`top`/`front`/`side`/`iso`），输出标准机械正交三视图与轴测图。
