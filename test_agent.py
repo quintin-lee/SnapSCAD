@@ -1302,6 +1302,84 @@ def test_local_healing_and_incremental_patch():
     assert len(patched["parts"]) == 3  # 其他部件丝毫不受影响
 
 
+def test_geometric_constraint_solver_and_semantic_anchors():
+    """测试 34: 确定性语义锚点与相对几何约束求解器 (resolve_geometric_constraints)"""
+    from openscad_agent.spec import resolve_geometric_constraints, validate_spec
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    spec = {
+        "name": "assembly_anchors",
+        "description": "基于语义相对锚点与孔系阵列求解的模型",
+        "parts": [
+            {
+                "id": "base_plate",
+                "primitive": "cube",
+                "size": [100.0, 80.0, 10.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [
+                    # 四角阵列沉孔: 边距 8mm
+                    {"primitive": "cylinder", "size": [4.0, 10.0], "pattern": "4_corners", "corner_inset": 8.0}
+                ]
+            },
+            {
+                "id": "center_boss",
+                "primitive": "cylinder",
+                "size": [30.0, 25.0],
+                "attach_to": "base_plate",
+                "face": "top",
+                "align": "center",
+                "holes": [
+                    {"primitive": "cylinder", "size": [10.0, 25.0], "align": "center"}
+                ]
+            },
+            {
+                "id": "side_flange",
+                "primitive": "cube",
+                "size": [15.0, 20.0, 10.0],
+                "attach_to": "base_plate",
+                "face": "right",
+                "align": "center"
+            }
+        ],
+        "assembly": {"union_parts": ["base_plate", "center_boss", "side_flange"]}
+    }
+
+    # 1. 约束求解器推导
+    solved, actions = resolve_geometric_constraints(spec)
+    assert len(actions) >= 3
+
+    # 验证 base_plate 四角阵列通孔
+    base_p = solved["parts"][0]
+    assert len(base_p["holes"]) == 4
+    h_centers = [h["center"] for h in base_p["holes"]]
+    assert [8.0, 8.0, 0.0] in h_centers
+    assert [92.0, 8.0, 0.0] in h_centers
+    assert [8.0, 72.0, 0.0] in h_centers
+    assert [92.0, 72.0, 0.0] in h_centers
+
+    # 验证 center_boss 自动求解到 base_plate 顶部 (z=10) 且 XY 居中 (x=50, y=40)
+    boss_p = solved["parts"][1]
+    assert boss_p["center"] == [50.0, 40.0, 10.0]
+    # 验证内部中心孔自动继承 boss 中心
+    assert boss_p["holes"][0]["center"] == [50.0, 40.0, 10.0]
+
+    # 验证 side_flange 自动贴合在 base_plate 右侧面 (x=100.0)
+    flange_p = solved["parts"][2]
+    assert flange_p["center"][0] == 100.0
+    assert flange_p["center"][2] == 0.0
+
+    # 2. 真实 OpenSCAD 几何生成与编译校验
+    scad_code = spec_to_scad(spec, fn=32)
+    with tempfile.TemporaryDirectory() as td:
+        scad_f = Path(td) / "anchor_test.scad"
+        scad_f.write_text(scad_code, encoding="utf-8")
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        ok, msg = renderer.validate(scad_f)
+        assert ok, f"语义锚点求解生成的 OpenSCAD 编译失败: {msg}"
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1342,6 +1420,7 @@ def run_all_tests() -> bool:
         ("机械结构力学应力集中深度分析与微服务 STEP 导出 API", test_structural_stress_doctor_and_step_api),
         ("几何转译防共面微延展保护与 Customizer 参数提升引擎", test_epsilon_anti_coplanar_and_param_hoisting),
         ("本地零延迟自愈规则库与故障部件定位 (heal_spec_locally)", test_local_healing_and_incremental_patch),
+        ("确定性语义锚点与相对几何约束求解器 (resolve_geometric_constraints)", test_geometric_constraint_solver_and_semantic_anchors),
     ]
 
     all_ok = True
