@@ -14,6 +14,7 @@ _dist/
 .vscode/
 .idea/
 .DS_Store
+.omp/
 
 # 依赖锁（如需锁定可保留，默认忽略）
 # 保留 requirements.txt 入库

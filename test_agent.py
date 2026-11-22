@@ -401,6 +401,49 @@ def test_gui_embedded_viewport():
     assert "_load_3d_viewer" in gui_text
 
 
+def test_caching_and_parallel_rendering():
+    """测试 17: 增量渲染缓存检测与多视角并发渲染加速"""
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+
+    # 1. 验证 OpenSCAD 特性探测 (返回集合且不抛异常)
+    feats = renderer._detect_features(renderer.openscad)
+    assert isinstance(feats, set)
+
+    # 2. 验证多视角并发渲染
+    scad_code = "cube([20, 20, 20], center=true);"
+    scad_path = Path("out_test/cache_test.scad")
+    scad_path.parent.mkdir(parents=True, exist_ok=True)
+    scad_path.write_text(scad_code, encoding="utf-8")
+
+    views = ["top", "front", "side", "iso"]
+    out_mv = Path("out_test/cache_test_mv")
+    png_paths = renderer.render_multi_view(scad_path, out_mv, views=views, size=(200, 150))
+    assert len(png_paths) == 4
+    for p in png_paths:
+        assert p.exists() and p.stat().st_size > 0
+
+    # 3. 验证增量缓存命中 (mtime 比较)
+    out_stl = Path("out_test/cache_test.stl")
+    renderer.export_model(scad_path, out_stl, force=True)
+    assert out_stl.exists()
+    st_mtime_1 = out_stl.stat().st_mtime
+
+    # 再次调用，无需修改 scad，应当命中缓存直接返回
+    out_stl_cached = renderer.export_model(scad_path, out_stl, force=False)
+    assert out_stl_cached == out_stl
+    assert out_stl.stat().st_mtime == st_mtime_1
+
+    # 验证 preview_view 增量缓存
+    out_png = Path("out_test/cache_preview.png")
+    renderer.render_preview_view(scad_path, out_png, view="top", force=True)
+    png_mtime_1 = out_png.stat().st_mtime
+    renderer.render_preview_view(scad_path, out_png, view="top", force=False)
+    assert out_png.stat().st_mtime == png_mtime_1
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -424,6 +467,7 @@ def run_all_tests() -> bool:
         ("局域网 Web 资产共享服务与多端 IP 解析", test_lan_server_and_capture),
         ("3D 文字浮雕生成编译与审查修剪角色交替", test_text_relief_and_trim),
         ("GUI 嵌入式 3D 交互视口与双模渲染切换", test_gui_embedded_viewport),
+        ("增量渲染缓存检测与多视角并发渲染加速", test_caching_and_parallel_rendering),
     ]
 
     all_ok = True

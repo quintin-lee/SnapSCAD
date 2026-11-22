@@ -252,19 +252,61 @@ class OpenscadRenderer:
         self._agent_export_3mf = export_3mf
         self._agent_export_2d = export_2d
 
+    _FEATURES_DETECTED: Optional[set[str]] = None
+
+    @classmethod
+    def _detect_features(cls, openscad_bin: str) -> set[str]:
+        """探测 OpenSCAD 支持的现代扩展特性 (--enable=manifold, fast-csg, lazy-union)。"""
+        if cls._FEATURES_DETECTED is not None:
+            return cls._FEATURES_DETECTED
+        feats: set[str] = set()
+        try:
+            code, out, err = run_cmd([openscad_bin, "--help"])
+            text = (out + " " + err).lower()
+            if "manifold" in text:
+                feats.add("manifold")
+            if "fast-csg" in text:
+                feats.add("fast-csg")
+            if "lazy-union" in text:
+                feats.add("lazy-union")
+        except Exception:
+            pass
+        cls._FEATURES_DETECTED = feats
+        return feats
+
     def _base_cmd(self) -> list[str]:
-        return [self.openscad]
+        cmd = [self.openscad]
+        feats = self._detect_features(self.openscad)
+        if "manifold" in feats:
+            cmd.append("--enable=manifold")
+        elif "fast-csg" in feats:
+            cmd.append("--enable=fast-csg")
+        if "lazy-union" in feats:
+            cmd.append("--enable=lazy-union")
+        return cmd
 
     def _preview_arg(self) -> list[str]:
         """根据 render_precision 返回 --preview 参数（Fast=快预览, 其他=完整求值）。"""
         return [f"--preview={self.config.preview_mode()}"]
 
-    def export_model(self, scad_path: Path, out_path: Path) -> Path:
-        """导出 3D 模型（stl/obj/3mf）。"""
+    def export_model(self, scad_path: Path, out_path: Path, force: bool = False) -> Path:
+        """导出 3D 模型（stl/obj/3mf），具备增量缓存检测。"""
         fmt = out_path.suffix.lstrip(".").lower() or self.config.export_format
         if fmt not in self.FORMATS:
             raise ValueError(f"不支持的导出格式: {fmt}，可选: {sorted(self.FORMATS)}")
+        out_path = Path(out_path)
+        scad_path = Path(scad_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not force and out_path.exists() and scad_path.exists():
+            if out_path.stat().st_size > 0 and out_path.stat().st_mtime >= scad_path.stat().st_mtime:
+                _log.info("[render] 命中增量模型缓存，跳过重复求值: %s", out_path)
+                if fmt == "stl":
+                    self._sync_export_3mf(out_path)
+                    self._sync_export_2d(out_path, scad_path)
+                    self._generate_viewer(out_path, scad_path)
+                return out_path
+
         # 若导出格式为 stl，使用 binstl (二进制 STL，体积缩小 70%+, 导出速度更快)
         export_fmt = "binstl" if fmt == "stl" else fmt
         cmd = self._base_cmd() + [
@@ -278,7 +320,7 @@ class OpenscadRenderer:
         _log.info("[render] 已导出 3D 模型: %s", out_path)
         if fmt == "stl":
             self._sync_export_3mf(out_path)
-            self._sync_export_2d(out_path)
+            self._sync_export_2d(out_path, scad_path)
             self._generate_viewer(out_path, scad_path)
         return out_path
 
@@ -306,17 +348,20 @@ class OpenscadRenderer:
         except Exception as e:  # noqa: BLE001
             _log.warning("[render] 同步导出 3MF 失败: %s", e)
 
-    def _sync_export_2d(self, scad_path: Path, out_path: Optional[Path] = None) -> None:
+    def _sync_export_2d(self, out_path: Path, scad_path: Optional[Path] = None) -> None:
         """STL 导出后同步 2D 激光投影 (DXF+SVG)，优先级: 显式 GUI 开关 > config > 默认 False。"""
         export_2d = self._agent_export_2d
         if export_2d is None:
             export_2d = getattr(self.config, "export_2d", False)
         if not export_2d:
             return
-        target = out_path or scad_path
+        if scad_path is None:
+            scad_path = out_path.parent / f"{out_path.stem}.scad"
+        if not scad_path.exists():
+            return
         try:
-            dxf_out = target.with_suffix(".dxf")
-            svg_out = target.with_suffix(".svg")
+            dxf_out = out_path.with_suffix(".dxf")
+            svg_out = out_path.with_suffix(".svg")
             self.export_2d_projection(scad_path, dxf_out, cut=False)
             self.export_2d_projection(scad_path, svg_out, cut=False)
             _log.info("[render] 已同步导出 2D 激光投影: %s, %s", dxf_out.name, svg_out.name)
@@ -358,15 +403,25 @@ class OpenscadRenderer:
         out_png: Path,
         size: tuple[int, int] = (800, 600),
         view: str = "perspective",
+        force: bool = False,
     ) -> Path:
         """按指定物理相机角度渲染真实 2D 工程视角图。
 
+        具备增量缓存：若目标图片已存在且未旧于 .scad 源码，直接复用跳过重复渲染。
         view 取值：top/front/side/iso/perspective。
         自动注入 --camera 空间旋转与 --projection 正交/透视矩阵。
         OpenSCAD 2021.01 等老版本不支持 --camera，若失败则回退到
         --autocenter + --viewall + --projection 的基础模式，保证跨版本可渲染。
         """
+        out_png = Path(out_png)
+        scad_path = Path(scad_path)
         out_png.parent.mkdir(parents=True, exist_ok=True)
+
+        if not force and out_png.exists() and scad_path.exists():
+            if out_png.stat().st_size > 0 and out_png.stat().st_mtime >= scad_path.stat().st_mtime:
+                _log.debug("[render] 命中视角缓存(%s)，跳过重复渲染: %s", view, out_png.name)
+                return out_png
+
         rot, proj = self.CAMERA_MATRIX.get(view, ("55,0,25", "p"))
         base_cmd = self._base_cmd() + [
             "--autocenter", "--viewall",
@@ -395,25 +450,42 @@ class OpenscadRenderer:
         self, scad_path: Path, out_prefix: Path, views: tuple[str, ...] = VIEWS,
         size: tuple[int, int] = (600, 450),
     ) -> list[Path]:
-        """渲染多个视角预览图，返回各视角 png 路径列表。
+        """渲染多个视角预览图，返回各视角 png 路径列表（多线程并发加速）。
 
         用于审查时多角度比对。失败视角自动跳过（不影响其他视角）。
         """
         out_prefix = Path(out_prefix)
-        paths: list[Path] = []
-        for v in views:
-            target = out_prefix.with_name(f"{out_prefix.stem}_{v}.png")
-            try:
-                paths.append(self.render_preview_view(scad_path, target, size=size, view=v))
-            except RuntimeError as e:
-                _log.info("[render] 视角 %s 渲染失败，跳过: %s", v, str(e)[:120])
-        return paths
+        tasks = [(v, out_prefix.with_name(f"{out_prefix.stem}_{v}.png")) for v in views]
+        results: dict[str, Path] = {}
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 6)) as executor:
+            future_to_view = {
+                executor.submit(self.render_preview_view, scad_path, target, size=size, view=v): v
+                for v, target in tasks
+            }
+            for fut in future_to_view:
+                v = future_to_view[fut]
+                try:
+                    res = fut.result()
+                    results[v] = res
+                except RuntimeError as e:
+                    _log.info("[render] 视角 %s 渲染失败，跳过: %s", v, str(e)[:120])
+        return [results[v] for v in views if v in results]
 
     def render_exploded_view(
-        self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600), explode_factor: float = 1.2
+        self, scad_path: Path, out_png: Path, size: tuple[int, int] = (800, 600), explode_factor: float = 1.2, force: bool = False
     ) -> Path:
-        """渲染机械爆炸图分解预览（将 explode 参数设为 >0 展开各内部零件）。"""
+        """渲染机械爆炸图分解预览（将 explode 参数设为 >0 展开各内部零件），具备增量缓存。"""
+        out_png = Path(out_png)
+        scad_path = Path(scad_path)
         out_png.parent.mkdir(parents=True, exist_ok=True)
+
+        if not force and out_png.exists() and scad_path.exists():
+            if out_png.stat().st_size > 0 and out_png.stat().st_mtime >= scad_path.stat().st_mtime:
+                _log.debug("[render] 命中机械爆炸图缓存: %s", out_png.name)
+                return out_png
+
         cmd = self._base_cmd() + [
             "-D", f"explode={explode_factor}",
             "--autocenter", "--viewall",
@@ -428,7 +500,7 @@ class OpenscadRenderer:
         return out_png
 
     def render_blueprint(self, scad_path: Path, out_blueprint: Path, sub_size: tuple[int, int] = (400, 300)) -> Path:
-        """合成 2x2 工业四视图工程制图蓝图 (正视/轴测/俯视/侧视)。"""
+        """合成 2x2 工业四视图工程制图蓝图 (正视/轴测/俯视/侧视，四视角多线程并发加速)。"""
         out_blueprint = Path(out_blueprint)
         out_blueprint.parent.mkdir(parents=True, exist_ok=True)
         stem = scad_path.stem
@@ -442,10 +514,20 @@ class OpenscadRenderer:
         v_side = tmp_dir / f"{stem}_s.png"
 
         try:
-            self.render_preview_view(scad_path, v_front, size=sub_size, view="front")
-            self.render_preview_view(scad_path, v_iso, size=sub_size, view="iso")
-            self.render_preview_view(scad_path, v_top, size=sub_size, view="top")
-            self.render_preview_view(scad_path, v_side, size=sub_size, view="side")
+            tasks = [
+                (v_front, "front"),
+                (v_iso, "iso"),
+                (v_top, "top"),
+                (v_side, "side"),
+            ]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(self.render_preview_view, scad_path, target, size=sub_size, view=v_name)
+                    for target, v_name in tasks
+                ]
+                for f in futures:
+                    f.result()
 
             montage_bin = shutil.which("montage")
             if montage_bin:
@@ -505,16 +587,23 @@ class OpenscadRenderer:
             return True, "语法与编译检查通过"
         return False, msg[-2000:]
 
-    def export_2d_projection(self, scad_path: Path, out_2d: Path, cut: bool = False) -> Path:
-        """导出 2D 激光切割/CNC 轮廓投影 (dxf 或 svg)。
+    def export_2d_projection(self, scad_path: Path, out_2d: Path, cut: bool = False, force: bool = False) -> Path:
+        """导出 2D 激光切割/CNC 轮廓投影 (dxf 或 svg)，具备增量缓存。
 
         cut = False: 全模型正投影 (俯视外轮廓)
         cut = True:  Z=0 水平面横剖切截面轮廓
         """
+        out_2d = Path(out_2d)
+        scad_path = Path(scad_path)
         fmt = out_2d.suffix.lstrip(".").lower()
         if fmt not in ("dxf", "svg"):
             raise ValueError(f"2D 投影仅支持 dxf 或 svg，传入为: {fmt}")
         out_2d.parent.mkdir(parents=True, exist_ok=True)
+
+        if not force and out_2d.exists() and scad_path.exists():
+            if out_2d.stat().st_size > 0 and out_2d.stat().st_mtime >= scad_path.stat().st_mtime:
+                _log.debug("[render] 命中 2D 投影增量缓存: %s", out_2d.name)
+                return out_2d
 
         root_module = _extract_root_module(scad_path)
         cut_str = "true" if cut else "false"
