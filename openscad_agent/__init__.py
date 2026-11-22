@@ -13,8 +13,9 @@ from .log import setup_logging, get_logger
 from .spec import validate_spec, normalize_part
 from .doctor import check_printability, PrintabilityReport, generate_print_guide, MATERIAL_PROFILES
 from .gallery import generate_gallery
-from .packager import package_project
-from .server import serve_assets, stop_server, is_port_in_use
+from .packager import package_project, export_scad_library
+from .server import serve_assets, stop_server, is_port_in_use, create_app
+from .workspace import generate_workspace_html
 from .slicer import probe_slicers, slice_model, SlicingConfig, SlicingResult, parse_gcode_metadata
 from .dispatcher import PrinterDispatcher, DispatchConfig, DispatchResult
 
@@ -40,11 +41,14 @@ __all__ = [
     "generate_print_guide",
     "MATERIAL_PROFILES",
     "generate_gallery",
+    "generate_workspace_html",
     "package_project",
+    "export_scad_library",
     "upload_to_3d_printer",
     "serve_assets",
     "stop_server",
     "is_port_in_use",
+    "create_app",
     "probe_slicers",
     "slice_model",
     "SlicingConfig",

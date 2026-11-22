@@ -771,6 +771,117 @@ def test_batch_pipeline_and_gallery_gcode():
         assert "turbine_blade" in html_txt
 
 
+def test_scad_library_exporter():
+    """测试 24: OpenSCAD 模块生态包导出规范 (命名空间隔离与可复用库函数)"""
+    from openscad_agent.packager import export_scad_library
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as td:
+        spec = {
+            "name": "bearing_flange",
+            "description": "高精度法兰轴承座",
+            "parts": [
+                {"id": "flange_base", "primitive": "cube", "size": [50.0, 50.0, 8.0], "center": [0, 0, 0]},
+                {"id": "shaft_sleeve", "primitive": "cylinder", "size": [22.0, 20.0], "center": [0, 0, 8.0]},
+            ],
+        }
+        lib_path = export_scad_library(spec, out_dir=td, namespace="snapscad")
+        assert lib_path.exists()
+
+        target_dir = lib_path.parent
+        ex_path = target_dir / "example.scad"
+        md_path = target_dir / "README.md"
+        zip_path = target_dir / "bearing_flange_library_bundle.zip"
+
+        assert ex_path.exists()
+        assert md_path.exists()
+        assert zip_path.exists()
+
+        # 验证生成的库代码包含隔离命名空间
+        lib_text = lib_path.read_text(encoding="utf-8")
+        assert "module snapscad_bearing_flange_flange_base" in lib_text
+        assert "module snapscad_bearing_flange_assembly" in lib_text
+
+        # 验证 example.scad 使用 OpenSCAD 真实编译无报错
+        out_stl = Path(td) / "compiled_lib.stl"
+        res = subprocess.run(["openscad", "-o", str(out_stl), str(ex_path)], capture_output=True, text=True, timeout=15)
+        assert res.returncode == 0
+        assert out_stl.exists() and out_stl.stat().st_size > 0
+
+
+def test_cloud_microservice_api_and_workspace():
+    """测试 25: 云原生微服务 REST API 与协同工作台 (Health/Compile/Slice/FastAPI)"""
+    from openscad_agent.server import serve_assets, stop_server, create_app
+    from openscad_agent.workspace import generate_workspace_html
+    import requests
+
+    # 1. 验证云原生 FastAPI 应用工厂
+    fastapi_app = create_app()
+    assert fastapi_app is not None
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        # 生成测试文件
+        scad_f = out_dir / "cloud_cube.scad"
+        scad_f.write_text("cube([15, 15, 10]);\n", encoding="utf-8")
+        spec_f = out_dir / "cloud_cube_spec.json"
+        spec_f.write_text(json.dumps({
+            "name": "cloud_cube",
+            "description": "云原生测试方块",
+            "parts": [{"id": "cube", "primitive": "cube", "size": [15, 15, 10], "center": [0,0,0]}],
+        }), encoding="utf-8")
+
+        # 2. 验证工作台页面生成
+        ws_html = generate_workspace_html(out_dir)
+        assert ws_html.exists()
+        assert "SnapSCAD 交互协同建模工作台" in ws_html.read_text(encoding="utf-8")
+
+        # 3. 启动轻量微服务 (非阻塞模式)
+        _, _, port = serve_assets(out_dir, port=8993, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 4. 验证 GET /api/health
+            r_h = requests.get(f"{base}/api/health", timeout=3)
+            assert r_h.status_code == 200
+            assert r_h.json()["status"] == "ok"
+
+            # 5. 验证 GET /api/models
+            r_m = requests.get(f"{base}/api/models", timeout=3)
+            assert r_m.status_code == 200
+            assert len(r_m.json()) >= 1
+
+            # 6. 验证 POST /api/compile (实时重编译)
+            r_c = requests.post(f"{base}/api/compile", json={
+                "stem": "cloud_cube",
+                "scad_code": "cube([18, 18, 12]);\n",
+            }, timeout=15)
+            assert r_c.status_code == 200
+            assert r_c.json()["success"] is True
+            assert (out_dir / "cloud_cube.stl").exists()
+
+            # 7. 验证 POST /api/slice (在线切片)
+            r_s = requests.post(f"{base}/api/slice", json={
+                "stem": "cloud_cube",
+                "material": "PLA",
+                "layer_height": 0.2,
+            }, timeout=15)
+            assert r_s.status_code == 200
+            assert r_s.json()["success"] is True
+            assert (out_dir / "cloud_cube.gcode").exists()
+
+            # 8. 验证 POST /api/export_library (在线导出生态库)
+            r_e = requests.post(f"{base}/api/export_library", json={
+                "stem": "cloud_cube",
+                "namespace": "cloud",
+            }, timeout=10)
+            assert r_e.status_code == 200
+            assert r_e.json()["success"] is True
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -801,6 +912,8 @@ def run_all_tests() -> bool:
         ("自动化切片引擎、拓扑解析、G-code 生成与增量缓存", test_slicer_engine),
         ("多协议 3D 打印机集群调度器 (Klipper/OctoPrint/拓竹)", test_printer_dispatcher),
         ("工业级批量并发逆向生产流水线与展厅 G-code 元数据集成", test_batch_pipeline_and_gallery_gcode),
+        ("OpenSCAD 模块生态包导出规范 (命名空间与外部库调用)", test_scad_library_exporter),
+        ("云原生微服务 REST API 与协同工作台 (Health/Compile/Slice/FastAPI)", test_cloud_microservice_api_and_workspace),
     ]
 
     all_ok = True
