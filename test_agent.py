@@ -1380,6 +1380,45 @@ def test_geometric_constraint_solver_and_semantic_anchors():
         assert ok, f"语义锚点求解生成的 OpenSCAD 编译失败: {msg}"
 
 
+def test_structured_output_and_robust_json_parsing():
+    """测试 35: 服务端结构化约束解码与容错 JSON 解析器 (robust_json_loads)"""
+    from openscad_agent.vision import robust_json_loads, AgnesVision
+
+    # 1. 验证被截断缺失闭合括号的 JSON 自动补全
+    truncated_raw = '{"name": "cut_cube", "parts": [{"id": "box", "primitive": "cube", "size": [10, 20, 30]'
+    data1 = robust_json_loads(truncated_raw)
+    assert data1["name"] == "cut_cube"
+    assert data1["parts"][0]["id"] == "box"
+
+    # 2. 验证多余尾逗号 (trailing commas) 清洗
+    trailing_raw = """
+    {
+      "name": "comma_test",
+      "parts": [
+        {"id": "p1", "primitive": "cylinder", "size": [10, 20],},
+      ],
+    }
+    """
+    data2 = robust_json_loads(trailing_raw)
+    assert data2["name"] == "comma_test"
+    assert len(data2["parts"]) == 1
+
+    # 3. 验证带前后自由文本和 Markdown 代码块的内容提取
+    mixed_raw = """
+    好的，这是根据您的描述为您生成的 3D 模型规格：
+    ```json
+    {
+      "name": "flange",
+      "parts": [{"id": "flange_base", "primitive": "cylinder", "size": [50, 5]}]
+    }
+    ```
+    请在 OpenSCAD 中查看效果！
+    """
+    spec = AgnesVision._extract_spec(mixed_raw)
+    assert spec["name"] == "flange"
+    assert spec["parts"][0]["primitive"] == "cylinder"
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1421,6 +1460,7 @@ def run_all_tests() -> bool:
         ("几何转译防共面微延展保护与 Customizer 参数提升引擎", test_epsilon_anti_coplanar_and_param_hoisting),
         ("本地零延迟自愈规则库与故障部件定位 (heal_spec_locally)", test_local_healing_and_incremental_patch),
         ("确定性语义锚点与相对几何约束求解器 (resolve_geometric_constraints)", test_geometric_constraint_solver_and_semantic_anchors),
+        ("服务端结构化语法约束解码与容错 JSON 解析 (robust_json_loads)", test_structured_output_and_robust_json_parsing),
     ]
 
     all_ok = True
