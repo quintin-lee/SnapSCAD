@@ -34,6 +34,8 @@
 ```
 
 设计要点：
+- **工业级标准 STEP 实体导出 (ISO 10303-21 AP214) 与 FreeCAD B-Rep 建模脚本 (`interop.py`)**：零重型外部依赖、纯原生 Python 算法构建标准的 STEP AP214 几何实体 (`MANIFOLD_SOLID_BREP` + `CLOSED_SHELL` + `POLY_LOOP`)，生成的 `.step` 可直接在 SolidWorks、Autodesk Inventor、Fusion 360、Siemens NX 及 FreeCAD 中作为无损实体特征打开进行二次装配与工程出图；同步输出参数化 FreeCAD Python 脚本，支持在 FreeCAD GUI 或无头 `freecadcmd` 下一键复原几何树与布尔装配。
+- **机械结构力学应力集中与孔壁撕裂深度体检 (`doctor.py`)**：3D 打印医生系统新增结构力学分析模块 `analyze_structural_stress`，自动计算通孔与外轮廓的最小绝对边距及边径比（预警危险孔壁撕裂并指导外扩/加强筋补偿）；深度辨识零件内凹 90° 直角与拐角阶梯处的应力集中系数（缺口效应预警 $K_t \approx 2.8$ 并推荐过渡圆角 `fillet` 半径）；动态识别细长截面刚度突变，大幅提升工程承载件机械抗疲劳寿命与 3D 打印良品率。
 - **增量 mtime 渲染缓存与工程四视图多线程并发加速**：基于文件时间戳精准判断，已渲染模型与视图在未发生几何改动时实现 0ms 瞬间命中复用；利用 Python `ThreadPoolExecutor` 绕过 GIL 并发调用系统级 OpenSCAD 进程，多视角与工业蓝图渲染提速 60%+，并自动探测注入现代 OpenSCAD 扩展参数 (`--enable=manifold`, `fast-csg`, `lazy-union`)。
 - **ISO 标准公制内外螺纹生成器 (`thread`)**：采用数学闭式解析与无缝流形拓扑算法，直接生成 100% 封闭无自交的螺纹单 `polyhedron` 实体；支持外螺纹螺栓、内螺纹六角螺母套筒、标准螺距自动查表、两端 45° 机械导入倒角与 FDM 3D 打印热胀冷缩间隙补偿。
 - **工业级渐开线齿轮构建器 (`gear`)**：原生支持模数 (`module`)、齿数 (`teeth`)、压力角 (`pressure_angle`)，基于 2D 渐开线极坐标方程生成精准齿廓，自带中心传动轴孔与标准键槽/D轴防滑切口。
@@ -140,13 +142,16 @@ Base URL 默认 `https://apihub.agnes-ai.com`，模型默认 `agnes-3.0-flash`�
 # 6) 一键生成或更新 3D 模型展厅画廊
 .venv/bin/python main.py --gallery
 
-# 7) 启动交互式终端建模向导
+# 7) 逆向建模并同步导出 STEP 工业标准实体与 FreeCAD 脚本
+.venv/bin/python main.py -i photo.jpg --export-step
+
+# 8) 启动交互式终端建模向导
 snapscad --wizard
 
-# 8) 启动局域网 3D 资产共享服务 (供手机/平板无线浏览)
+# 9) 启动局域网 3D 资产共享服务 (供手机/平板无线浏览)
 snapscad --serve 8080
 
-# 9) 执行全套自动化质量基准与回归测试
+# 10) 执行全套自动化质量基准与回归测试
 snapscad --test
 
 # 查看 LLM 识别用的系统提示词/规格 schema
