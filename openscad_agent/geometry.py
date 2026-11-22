@@ -646,8 +646,62 @@ def _magnet_pocket_hole_code(hole: dict[str, Any], center: list[float]) -> list[
     return lines
 
 
-def _hole_code(hole: dict[str, Any]) -> list[str]:
-    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阶梯沉头孔、强磁沉孔与阵列）。"""
+def _hole_body_with_epsilon(prim: str, size: list[float], center: list[float], epsilon: float = 0.05) -> list[str]:
+    """按绝对坐标生成带防共面微延展保护的挖除实体，彻底杜绝 CGAL 差集零厚度面与非流形坏边。"""
+    cx, cy, cz = (float(center[i]) if i < len(center) else 0.0 for i in range(3))
+    p = (prim or "cube").lower()
+    if p in ("cylinder", "cone"):
+        d = float(size[0]) if len(size) >= 1 else 10.0
+        h = float(size[1]) if len(size) >= 2 else 10.0
+        r = d / 2.0
+        return [
+            f"translate([{_fmt(cx - r)}, {_fmt(cy - r)}, {_fmt(cz - epsilon)}])",
+            f"  cylinder(h = {_fmt(h + 2 * epsilon)}, d = {_fmt(d)}, center = false);",
+        ]
+    elif p in ("cube", "cuboid", "box"):
+        x = float(size[0]) if len(size) >= 1 else 10.0
+        y = float(size[1]) if len(size) >= 2 else 10.0
+        z = float(size[2]) if len(size) >= 3 else 10.0
+        return [
+            f"translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz - epsilon)}])",
+            f"  cube([{_fmt(x)}, {_fmt(y)}, {_fmt(z + 2 * epsilon)}], center = false);",
+        ]
+    elif p == "sphere":
+        d = float(size[0]) if len(size) >= 1 else 10.0
+        return [
+            f"translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])",
+            f"  sphere(d = {_fmt(d + 2 * epsilon)});",
+        ]
+    else:
+        return _part_body(prim, size, center, "hole")
+
+
+def _format_customizer_param(name: str, val: Any, label: str = "") -> list[str]:
+    """将参数转换为带 Customizer 注释与合理滑块边界的 OpenSCAD 变量声明。"""
+    safe_k = "".join(c if c.isalnum() or c == "_" else "_" for c in str(name))
+    if not safe_k or safe_k[0].isdigit():
+        safe_k = f"p_{safe_k}"
+    lines: list[str] = []
+    if label:
+        lines.append(f"// {label}")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        f = float(val)
+        step = 0.1 if f < 2 else (0.5 if f <= 10 else 1.0)
+        min_v = max(step, round(f * 0.2, 1))
+        max_v = max(min_v + step, round(f * 3.0, 1))
+        lines.append(f"{safe_k} = {_fmt(f)}; // [{_fmt(min_v)}:{_fmt(step)}:{_fmt(max_v)}]")
+    elif isinstance(val, bool):
+        lines.append(f"{safe_k} = {'true' if val else 'false'};")
+    elif isinstance(val, str):
+        lines.append(f'{safe_k} = "{val}";')
+    elif isinstance(val, (list, tuple)):
+        vals = ", ".join(_fmt(float(x)) if isinstance(x, (int, float)) else str(x) for x in val)
+        lines.append(f"{safe_k} = [{vals}];")
+    return lines
+
+
+def _hole_code(hole: dict[str, Any], epsilon: float = 0.05) -> list[str]:
+    """生成单个挖除实体的代码行（缩进对齐 difference() 内部，支持阶梯沉头孔、强磁沉孔、防共面微延展与阵列）。"""
     prim = hole.get("primitive", "cube")
     center = hole.get("center", [0, 0, 0])
     if prim == "counterbore" or hole.get("standard"):
@@ -656,8 +710,8 @@ def _hole_code(hole: dict[str, Any]) -> list[str]:
         lines = _magnet_pocket_hole_code(hole, center)
     else:
         size = _normalize_hole_size(prim, hole)
-        body = _part_body(prim, size, center, "hole")
-        lines = [f"    // hole: {prim} {size} @ {center}"]
+        body = _hole_body_with_epsilon(prim, size, center, epsilon=epsilon)
+        lines = [f"    // hole: {prim} {size} @ {center} (防共面 eps={_fmt(epsilon)}mm)"]
         lines += [f"      {l}" if l else l for l in body]
     return _apply_array_wrapper(lines, hole, indent="    ")
 
@@ -812,26 +866,19 @@ def _part_body_rel(prim: str, size: list[float], note: str) -> list[str]:
     return builder(size, [0, 0, 0], [], note).split("\n")
 
 
-def _hole_code_rel(hole: dict[str, Any], part_center: list[float]) -> list[str]:
-    """相对坐标版本的孔洞（孔洞中心减去部件中心，配合外层 translate+rotate）。"""
+def _hole_code_rel(hole: dict[str, Any], part_center: list[float], epsilon: float = 0.05) -> list[str]:
+    """相对坐标版本的孔洞（孔洞中心减去部件中心，配合外层 translate+rotate，附带防共面微延展）。"""
     prim = hole.get("primitive", "cube")
     size = _normalize_hole_size(prim, hole)
     hc = hole.get("center", [0, 0, 0])
     rel_center = [float(hc[i]) - float(part_center[i]) for i in range(3)]
-    # 直接以 rel_center 为原点生成几何（不经过 builder 的默认 center），
-    # 复用 builder 但把其 translate 目标改成 rel_center。
-    builder = PRIMITIVE_BUILDERS.get(prim, _cube_code)
-    body = builder(size, rel_center, [], "").split("\n")
-    out: list[str] = [f"        // hole: {prim} rel{rel_center}"]
+    body = _hole_body_with_epsilon(prim, size, rel_center, epsilon=epsilon)
+    out: list[str] = [f"        // hole: {prim} rel{rel_center} (防共面 eps={_fmt(epsilon)}mm)"]
     for line in body:
         s = line.strip()
-        if s.startswith("translate("):
-            # 重新定位到相对坐标（builder 已按 rel_center 生成，直接用）
-            out.append(f"      {s}")
-        elif s.startswith("//"):
+        if s.startswith("//"):
             continue
-        else:
-            out.append(f"        {s}")
+        out.append(f"        {s}")
     return out
 
 
@@ -875,29 +922,34 @@ def spec_to_scad(
     out.append(f"// 单位: mm | 生成时间: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}")
     if fn:
         out.append(f"$fn = {fn};  // 圆柱/球体分段精度")
+    out.append("epsilon = 0.05;  // 防共面自交微增量，杜绝 CGAL 差集零厚度与非流形坏边")
     if params:
         out.append(f"// params: {json.dumps(params, ensure_ascii=False)}")
     out.append(f"// ============================================================")
     out.append("")
 
-    # 自定义参数声明（支持 OpenSCAD Customizer 参数控件）
+    # 自定义参数声明（支持 OpenSCAD Customizer 参数控件与滑块联动）
+    out.append("// ---------------- 参数 (OpenSCAD Customizer) ----------------")
+    out.append("/* [Parameters] */")
     if params:
-        out.append("// ---------------- 参数 (OpenSCAD Customizer) ----------------")
-        out.append("/* [Parameters] */")
         for k, v in params.items():
-            safe_k = "".join(c if c.isalnum() or c == "_" else "_" for c in str(k))
-            if not safe_k or safe_k[0].isdigit():
-                safe_k = f"p_{safe_k}"
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                out.append(f"{safe_k} = {_fmt(float(v))};")
-            elif isinstance(v, bool):
-                out.append(f"{safe_k} = {'true' if v else 'false'};")
-            elif isinstance(v, str):
-                out.append(f'{safe_k} = "{v}";')
-            elif isinstance(v, (list, tuple)):
-                vals = ", ".join(_fmt(float(x)) if isinstance(x, (int, float)) else str(x) for x in v)
-                out.append(f"{safe_k} = [{vals}];")
-        out.append("")
+            out += _format_customizer_param(k, v)
+    else:
+        # 自动提取主要部件尺寸为参数变量 (Parameter Hoisting)
+        for p in parts[:4]:
+            pid = _sanitize_module_name(p.get("id", p.get("primitive", "part")), fallback="part")
+            prim = p.get("primitive", "cube")
+            sz = _normalize_size(prim, p)
+            if prim in ("cube", "cuboid", "box") and len(sz) >= 3:
+                out += _format_customizer_param(f"{pid}_x", sz[0], f"{pid} 长度 (X)")
+                out += _format_customizer_param(f"{pid}_y", sz[1], f"{pid} 宽度 (Y)")
+                out += _format_customizer_param(f"{pid}_z", sz[2], f"{pid} 高度 (Z)")
+            elif prim in ("cylinder", "cone") and len(sz) >= 2:
+                out += _format_customizer_param(f"{pid}_dia", sz[0], f"{pid} 直径")
+                out += _format_customizer_param(f"{pid}_height", sz[1], f"{pid} 高度")
+            elif prim == "sphere" and len(sz) >= 1:
+                out += _format_customizer_param(f"{pid}_dia", sz[0], f"{pid} 直径")
+    out.append("")
 
     # 各部件模块
     out.append("// ---------------- 部件 ----------------")
