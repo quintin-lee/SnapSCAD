@@ -758,6 +758,36 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
     # 规范化尺寸：兼容 size=[..]、size=标量、radius/height、cuboid/box 等多种 LLM 输出
     size = _normalize_size(prim, part)
 
+    # 拓扑轻量化与功能晶格 (Lattice & Infill Structure)
+    lat_info = part.get("lattice")
+    lattice_header_lines: list[str] = []
+    mod_lat: Optional[str] = None
+    if lat_info and isinstance(lat_info, dict):
+        from .lattice import (
+            generate_honeycomb_scad,
+            generate_orthogrid_scad,
+            generate_diamond_lattice_scad,
+            generate_gyroid_infill_scad,
+        )
+        lat_pat = str(lat_info.get("pattern", "honeycomb")).lower()
+        lat_cell = float(lat_info.get("cell_size", 8.0))
+        lat_wall = float(lat_info.get("wall_thickness", 1.2))
+        lx = float(size[0]) if len(size) >= 1 else 20.0
+        ly = float(size[1]) if len(size) >= 2 else 20.0
+        lz = float(size[2]) if len(size) >= 3 else 10.0
+        mod_lat = f"{part_name}_lattice"
+        if "honey" in lat_pat or "hex" in lat_pat:
+            l_code = generate_honeycomb_scad(lx, ly, lz, cell_size=lat_cell, wall_thickness=lat_wall, module_name=mod_lat)
+        elif "ortho" in lat_pat or "grid" in lat_pat:
+            l_code = generate_orthogrid_scad(lx, ly, lz, cell_size=lat_cell, rib_thickness=lat_wall, module_name=mod_lat)
+        elif "diamond" in lat_pat or "octet" in lat_pat:
+            l_code = generate_diamond_lattice_scad(lx, ly, lz, cell_size=lat_cell, strut_radius=lat_wall/2.0, module_name=mod_lat)
+        elif "gyroid" in lat_pat:
+            l_code = generate_gyroid_infill_scad(lx, ly, lz, cell_size=lat_cell, wall_thickness=lat_wall, module_name=mod_lat)
+        else:
+            l_code = generate_honeycomb_scad(lx, ly, lz, cell_size=lat_cell, wall_thickness=lat_wall, module_name=mod_lat)
+        lattice_header_lines = l_code.split("\n") + [""]
+
     lines: list[str] = [f"module {part_name}() {{"]
 
     c_open, c_close = _color_wrapper(color)
@@ -807,14 +837,19 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
 
     # 部件体（主体 + 孔洞）
     body: list[str] = []
+    if mod_lat:
+        core_body = [f"translate([{_fmt(float(center[0]))}, {_fmt(float(center[1]))}, {_fmt(float(center[2]))}])", f"  {mod_lat}();"]
+    else:
+        core_body = _part_body(prim, size, center, note)
+
     if holes:
         body.append(f"{indent}  difference() {{")
-        body += [f"{indent}    {l}" if l else l for l in _part_body(prim, size, center, note)]
+        body += [f"{indent}    {l}" if l else l for l in core_body]
         for hole in holes:
             body += [f"{indent}{l}" if l else l for l in _hole_code(hole)]
         body.append(f"{indent}  }}")
     else:
-        body += [f"{indent}  {l}" if l else l for l in _part_body(prim, size, center, note)]
+        body += [f"{indent}  {l}" if l else l for l in core_body]
 
     cx, cy, cz = (float(center[i]) for i in range(3))
     rx, ry, rz = (float(rotation[i]) for i in range(3))
@@ -824,7 +859,10 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
         # 绕部件中心旋转：translate 到中心 → rotate → 内部几何以中心为原点生成
         inner = [f"{indent}  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])",
                  f"{indent}    rotate([{_fmt(rx)}, {_fmt(ry)}, {_fmt(rz)}])"]
-        inner += [f"{indent}      {l}" if l else l for l in _part_body_rel(prim, size, note)]
+        if mod_lat:
+            inner += [f"{indent}      {mod_lat}();"]
+        else:
+            inner += [f"{indent}      {l}" if l else l for l in _part_body_rel(prim, size, note)]
         for hole in holes:
             inner += [f"{indent}{l}" if l else l for l in _hole_code_rel(hole, center)]
     else:
@@ -851,7 +889,7 @@ def _part_module(name: str, part: dict[str, Any]) -> list[str]:
     if c_close:
         lines.append(c_close)
     lines.append("}")
-    return lines
+    return lattice_header_lines + lines
 
 
 def _part_body(prim: str, size: list[float], center: list[float], note: str) -> list[str]:

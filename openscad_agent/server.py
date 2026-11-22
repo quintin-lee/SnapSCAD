@@ -541,6 +541,66 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        if clean_path == "/api/lattice/estimate":
+            stem = body.get("stem", "")
+            cand_spec = out_dir / f"{stem}_spec.json" if stem else None
+            w = float(body.get("width", 50.0))
+            l = float(body.get("length", 40.0))
+            h = float(body.get("height", 10.0))
+            if cand_spec and cand_spec.exists():
+                try:
+                    s_data = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    p0 = (s_data.get("parts") or [{}])[0]
+                    sz = p0.get("size") or [50, 40, 10]
+                    if len(sz) >= 3:
+                        w, l, h = float(sz[0]), float(sz[1]), float(sz[2])
+                except Exception:
+                    pass
+            from .lattice import estimate_lattice_weight_savings
+            pat = body.get("pattern", "honeycomb")
+            c_sz = float(body.get("cell_size", 8.0))
+            w_th = float(body.get("wall_thickness", 1.2))
+            rep = estimate_lattice_weight_savings(w, l, h, pattern=pat, cell_size=c_sz, wall_thickness=w_th)
+            self.send_json({"success": True, "report": rep.to_dict()})
+            return
+
+        if clean_path == "/api/lattice/apply":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少 stem 名称"}, status=400)
+                return
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                self.send_json({"error": f"未找到规格文件: {stem}_spec.json"}, status=404)
+                return
+            from .lattice import apply_lattice_lightweighting, estimate_lattice_weight_savings
+            from .geometry import spec_to_scad
+            from .core import OpenscadRenderer, AgentConfig
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                pat = body.get("pattern", "honeycomb")
+                c_sz = float(body.get("cell_size", 8.0))
+                w_th = float(body.get("wall_thickness", 1.2))
+                new_spec, actions = apply_lattice_lightweighting(
+                    spec, pattern=pat, cell_size=c_sz, wall_thickness=w_th
+                )
+                cand_spec.write_text(json.dumps(new_spec, indent=2, ensure_ascii=False), encoding="utf-8")
+                scad_code = spec_to_scad(new_spec, fn=48, ground_z=True)
+                cand_scad = out_dir / f"{stem}.scad"
+                cand_scad.write_text(scad_code, encoding="utf-8")
+                if body.get("recompile", True):
+                    cfg = AgentConfig(output_dir=str(out_dir))
+                    renderer = OpenscadRenderer(cfg)
+                    renderer.export_model(cand_scad, cand_scad.with_suffix(".stl"), force=True)
+                p0 = (new_spec.get("parts") or [{}])[0]
+                sz = p0.get("size") or [50, 40, 10]
+                w, l, h = (float(sz[0]), float(sz[1]), float(sz[2])) if len(sz) >= 3 else (50.0, 40.0, 10.0)
+                rep = estimate_lattice_weight_savings(w, l, h, pattern=pat, cell_size=c_sz, wall_thickness=w_th)
+                self.send_json({"success": True, "actions": actions, "report": rep.to_dict()})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -758,6 +818,53 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     "file_3mf": out_3mf.name,
                     "parts_count": len(spec.get("parts") or []),
                 }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/lattice/estimate")
+        def lattice_estimate_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            from .lattice import estimate_lattice_weight_savings
+            w = float(body.get("width", 50.0))
+            l = float(body.get("length", 40.0))
+            h = float(body.get("height", 10.0))
+            pat = body.get("pattern", "honeycomb")
+            c_sz = float(body.get("cell_size", 8.0))
+            w_th = float(body.get("wall_thickness", 1.2))
+            rep = estimate_lattice_weight_savings(w, l, h, pattern=pat, cell_size=c_sz, wall_thickness=w_th)
+            return {"success": True, "report": rep.to_dict()}
+
+        @app.post("/api/lattice/apply")
+        def lattice_apply_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .lattice import apply_lattice_lightweighting, estimate_lattice_weight_savings
+            from .geometry import spec_to_scad
+            from .core import OpenscadRenderer, AgentConfig
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                pat = body.get("pattern", "honeycomb")
+                c_sz = float(body.get("cell_size", 8.0))
+                w_th = float(body.get("wall_thickness", 1.2))
+                new_spec, actions = apply_lattice_lightweighting(
+                    spec, pattern=pat, cell_size=c_sz, wall_thickness=w_th
+                )
+                cand_spec.write_text(json.dumps(new_spec, indent=2, ensure_ascii=False), encoding="utf-8")
+                scad_code = spec_to_scad(new_spec, fn=48, ground_z=True)
+                cand_scad = out_dir / f"{stem}.scad"
+                cand_scad.write_text(scad_code, encoding="utf-8")
+                if body.get("recompile", True):
+                    cfg = AgentConfig(output_dir=str(out_dir))
+                    renderer = OpenscadRenderer(cfg)
+                    renderer.export_model(cand_scad, cand_scad.with_suffix(".stl"), force=True)
+                p0 = (new_spec.get("parts") or [{}])[0]
+                sz = p0.get("size") or [50, 40, 10]
+                w, l, h = (float(sz[0]), float(sz[1]), float(sz[2])) if len(sz) >= 3 else (50.0, 40.0, 10.0)
+                rep = estimate_lattice_weight_savings(w, l, h, pattern=pat, cell_size=c_sz, wall_thickness=w_th)
+                return {"success": True, "actions": actions, "report": rep.to_dict()}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

@@ -281,6 +281,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-patch', this)">✍️ 增量修剪</button>
       <button class="tab-btn" onclick="switchTab('tab-motion', this)">🎮 机构仿真</button>
       <button class="tab-btn" onclick="switchTab('tab-fea', this)">🌡️ 热力与公差</button>
+      <button class="tab-btn" onclick="switchTab('tab-lattice', this)">🪶 减重晶格</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -408,6 +409,48 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <div id="fea-risk-badge" style="font-weight:700;margin-bottom:6px;">-</div>
         <div id="fea-lift-val" style="font-size:0.8rem;color:var(--text);margin-bottom:6px;">-</div>
         <div id="fea-tips" style="font-size:0.75rem;color:var(--text-muted);line-height:1.4;">-</div>
+      </div>
+    </div>
+
+    <!-- 拓扑轻量化与点阵晶格减重面板 -->
+    <div id="tab-lattice" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🪶 拓扑轻量化与功能晶格 (Cellular Lattice)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        在 CAD 实体层生成航空级蜂窝或空间微结构，大幅降低克重并提高抗弯截面刚度。
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div>
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">晶格微结构构型:</label>
+          <select id="lattice-pattern" style="width:100%;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);" onchange="onLatticeParamChange()">
+            <option value="honeycomb" selected>六边形蜂窝 (Honeycomb, 航空级高比刚度)</option>
+            <option value="orthogrid">正交十字格栅 (Orthogrid, 双向对称加强筋)</option>
+            <option value="diamond">三维八面体微桁架 (Diamond, 全向等刚度)</option>
+            <option value="gyroid">螺旋极小曲面 (Gyroid, 柔性 TPU 弹性吸能)</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <div style="flex:1;">
+            <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">单元跨度 (mm):</label>
+            <input type="number" id="lattice-cell-size" value="8.0" min="2.0" max="30.0" step="1.0" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);" onchange="onLatticeParamChange()">
+          </div>
+          <div style="flex:1;">
+            <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">壁厚/筋宽 (mm):</label>
+            <input type="number" id="lattice-wall-th" value="1.2" min="0.4" max="5.0" step="0.2" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);" onchange="onLatticeParamChange()">
+          </div>
+        </div>
+        <div id="lattice-savings-box" style="background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:0.8rem;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+            <span style="color:var(--text-muted);">预计减重比例:</span>
+            <span id="lattice-saving-pct" style="color:#10b981;font-weight:600;">~70.0%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span style="color:var(--text-muted);">预计节省耗材:</span>
+            <span id="lattice-saving-g" style="color:var(--text);font-family:monospace;">~15.0 g</span>
+          </div>
+        </div>
+        <button onclick="triggerApplyLattice()" class="btn-accent" style="width:100%;margin-top:4px;background:#0d9488;">⚡ 应用拓扑减重并重新编译</button>
       </div>
     </div>
   </div>
@@ -1447,6 +1490,51 @@ async function triggerApplyToleranceCompensation() {
       } catch (_) {}
     } else {
       alert('❌ 补偿失败: ' + data.error);
+    }
+  } catch (e) {
+    alert('请求异常: ' + e);
+  }
+}
+
+async function onLatticeParamChange() {
+  const pat = document.getElementById('lattice-pattern').value;
+  const c = parseFloat(document.getElementById('lattice-cell-size').value) || 8.0;
+  const w = parseFloat(document.getElementById('lattice-wall-th').value) || 1.2;
+  try {
+    const res = await fetch('/api/lattice/estimate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, pattern: pat, cell_size: c, wall_thickness: w })
+    });
+    const data = await res.json();
+    if (data.success && data.report) {
+      document.getElementById('lattice-saving-pct').innerText = `~${data.report.weight_reduction_pct}%`;
+      document.getElementById('lattice-saving-g').innerText = `~${data.report.material_saved_grams} g`;
+    }
+  } catch (_) {}
+}
+
+async function triggerApplyLattice() {
+  const pat = document.getElementById('lattice-pattern').value;
+  const c = parseFloat(document.getElementById('lattice-cell-size').value) || 8.0;
+  const w = parseFloat(document.getElementById('lattice-wall-th').value) || 1.2;
+  alert('正在向模型注入轻量化减重晶格并重新编译...');
+  try {
+    const res = await fetch('/api/lattice/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, pattern: pat, cell_size: c, wall_thickness: w, recompile: true })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ 拓扑轻量化完成！\n减重比例: ${data.report.weight_reduction_pct}%\n已节省耗材: ${data.report.material_saved_grams} g\n正在载入新模型...`);
+      loadSTL(activeModelStem + '.stl?t=' + Date.now());
+      try {
+        const rScad = await fetch(activeModelStem + '.scad?t=' + Date.now());
+        if (rScad.ok) document.getElementById('scad-editor').value = await rScad.text();
+      } catch (_) {}
+    } else {
+      alert('❌ 减重失败: ' + data.error);
     }
   } catch (e) {
     alert('请求异常: ' + e);

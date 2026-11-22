@@ -766,6 +766,10 @@ class MainWindow(QMainWindow):
         self.btn_tolerance.clicked.connect(self.on_tolerance_compensation)
         act_bar.addWidget(self.btn_tolerance)
 
+        self.btn_lattice = QPushButton("🪶 晶格减重")
+        self.btn_lattice.clicked.connect(self.on_apply_lattice_lightweighting)
+        act_bar.addWidget(self.btn_lattice)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1623,6 +1627,61 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "补偿失败", f"公差补偿异常: {e}")
+
+    def on_apply_lattice_lightweighting(self) -> None:
+        """为当前模型注入拓扑轻量化点阵晶格/蜂窝减重结构并重新渲染。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        patterns = [
+            ("六边形蜂窝 Honeycomb (航空级高比刚度，推荐承载平板)", "honeycomb"),
+            ("正交十字格栅 Orthogrid (双向对称加强筋，推荐箱体壳体)", "orthogrid"),
+            ("三维八面体 Diamond (全向等刚度微桁架，推荐机械臂与连接件)", "diamond"),
+            ("螺旋极小曲面 Gyroid (柔性 TPU 缓震与流体散热孔)", "gyroid"),
+        ]
+        items = [p[0] for p in patterns]
+        chosen, ok = QInputDialog.getItem(self, "选择轻量化晶格构型", "请选择拓扑减重内部微结构单元:", items, 0, False)
+        if not ok or not chosen:
+            return
+        pat_key = next((p[1] for p in patterns if p[0] == chosen), "honeycomb")
+
+        from openscad_agent.lattice import apply_lattice_lightweighting, estimate_lattice_weight_savings
+        from openscad_agent.geometry import spec_to_scad
+        from openscad_agent.core import OpenscadRenderer, AgentConfig
+        try:
+            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            new_spec, actions = apply_lattice_lightweighting(spec, pattern=pat_key, cell_size=8.0, wall_thickness=1.2)
+            cand_spec.write_text(json.dumps(new_spec, indent=2, ensure_ascii=False), encoding="utf-8")
+            scad_code = spec_to_scad(new_spec, fn=48, ground_z=True)
+            scad_p.write_text(scad_code, encoding="utf-8")
+            cfg = AgentConfig(output_dir=str(scad_p.parent))
+            renderer = OpenscadRenderer(cfg)
+            renderer.export_model(scad_p, scad_p.with_suffix(".stl"), force=True)
+
+            p0 = (new_spec.get("parts") or [{}])[0]
+            sz = p0.get("size") or [50, 40, 10]
+            w, l, h = (float(sz[0]), float(sz[1]), float(sz[2])) if len(sz) >= 3 else (50.0, 40.0, 10.0)
+            rep = estimate_lattice_weight_savings(w, l, h, pattern=pat_key, cell_size=8.0, wall_thickness=1.2)
+
+            self.log(f"🪶 拓扑轻量化减重完成: 预计减重 {rep.weight_reduction_pct}% (节省耗材 {rep.material_saved_grams}g)")
+            self._refresh_file_list(scad_p.parent)
+            self._load_scad_into_editor(scad_p)
+            QMessageBox.information(
+                self, "轻量化减重成功",
+                f"已成功应用 {chosen.split()[0]} 拓扑晶格减重结构:\n\n"
+                f"• 预计减重比例: {rep.weight_reduction_pct}%\n"
+                f"• 预计节省耗材: {rep.material_saved_grams} g\n"
+                f"• 结构工艺建议:\n" + "\n".join(f"  - {r}" for r in rep.recommendations) +
+                "\n\n已自动更新 3D 实体模型与源码！"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "减重失败", f"轻量化处理异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

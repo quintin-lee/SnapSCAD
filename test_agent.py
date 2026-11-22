@@ -1850,6 +1850,108 @@ box_lid();
             stop_server()
 
 
+def test_cellular_lattice_and_lightweighting():
+    """测试 41: 轻量化减重拓扑与点阵晶格/蜂窝功能性微结构生成器 (lattice)"""
+    from openscad_agent.lattice import (
+        generate_honeycomb_scad,
+        generate_orthogrid_scad,
+        generate_diamond_lattice_scad,
+        generate_gyroid_infill_scad,
+        estimate_lattice_weight_savings,
+        apply_lattice_lightweighting,
+    )
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证各种晶格微结构生成器输出与减重估算
+    hc_scad = generate_honeycomb_scad(40, 30, 10, cell_size=8.0, wall_thickness=1.2)
+    assert "module lattice_honeycomb()" in hc_scad
+    assert "cylinder" in hc_scad
+
+    grid_scad = generate_orthogrid_scad(50, 50, 8, cell_size=10.0, rib_thickness=1.5)
+    assert "module lattice_orthogrid()" in grid_scad
+
+    diamond_scad = generate_diamond_lattice_scad(30, 30, 15, cell_size=10.0)
+    assert "module lattice_diamond()" in diamond_scad
+
+    gyroid_scad = generate_gyroid_infill_scad(40, 40, 10, cell_size=12.0)
+    assert "module lattice_gyroid()" in gyroid_scad
+
+    rep_hc = estimate_lattice_weight_savings(60, 40, 10, pattern="honeycomb", cell_size=8.0, wall_thickness=1.2)
+    assert rep_hc.weight_reduction_pct >= 50.0
+    assert rep_hc.material_saved_grams > 0.0
+
+    # 2. 验证模型规范应用减重晶格并顺利通过 OpenSCAD CGAL 真实编译
+    base_spec = {
+        "name": "drone_arm",
+        "parts": [
+            {
+                "id": "arm_body",
+                "primitive": "cube",
+                "size": [60.0, 30.0, 8.0],
+                "holes": [{"primitive": "cylinder", "size": [4.0, 12.0], "center": [10.0, 15.0, 0.0]}],
+                "lattice": {
+                    "pattern": "honeycomb",
+                    "cell_size": 8.0,
+                    "wall_thickness": 1.2,
+                },
+            }
+        ],
+    }
+
+    scad_code = spec_to_scad(base_spec, fn=24)
+    assert "module arm_body_lattice()" in scad_code
+    assert "arm_body_lattice();" in scad_code
+
+    with tempfile.TemporaryDirectory() as td:
+        work_dir = Path(td)
+        scad_f = work_dir / "drone_arm.scad"
+        scad_f.write_text(scad_code, encoding="utf-8")
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        ok, msg = renderer.validate(scad_f)
+        assert ok, f"蜂窝减重 OpenSCAD 编译失败: {msg}"
+
+        # 3. 验证微服务 REST API 端点 /api/lattice/estimate 与 /api/lattice/apply
+        spec_f = work_dir / "drone_arm_spec.json"
+        spec_f.write_text(json.dumps(base_spec), encoding="utf-8")
+
+        _, _, port = serve_assets(work_dir, port=8993, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 测试预估端点
+            r1 = requests.post(f"{base}/api/lattice/estimate", json={
+                "stem": "drone_arm",
+                "pattern": "honeycomb",
+                "cell_size": 8.0,
+                "wall_thickness": 1.2,
+            }, timeout=10)
+            assert r1.status_code == 200
+            d1 = r1.json()
+            assert d1["success"] is True
+            assert d1["report"]["weight_reduction_pct"] >= 50.0
+
+            # 测试应用减重与重编译端点
+            r2 = requests.post(f"{base}/api/lattice/apply", json={
+                "stem": "drone_arm",
+                "pattern": "orthogrid",
+                "cell_size": 10.0,
+                "wall_thickness": 1.5,
+                "recompile": True,
+            }, timeout=15)
+            assert r2.status_code == 200
+            d2 = r2.json()
+            assert d2["success"] is True
+            assert len(d2["actions"]) >= 1
+            assert (work_dir / "drone_arm.stl").exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1897,6 +1999,7 @@ def run_all_tests() -> bool:
         ("机械机构运动学铰链约束与 Web 3D 动态仿真 (kinematics)", test_kinematic_joints_and_motion_simulation),
         ("工业级轻量热力学有限元形变估算与装配公差热缩预补偿 (fea)", test_thermal_warping_analysis_and_tolerance_compensation),
         ("多色多耗材 3MF 生产切片工程文件导出与多喷头工具映射 (mmu)", test_multimaterial_3mf_export_and_slicing_metadata),
+        ("轻量化减重拓扑与点阵晶格/蜂窝功能性微结构生成器 (lattice)", test_cellular_lattice_and_lightweighting),
     ]
 
     all_ok = True

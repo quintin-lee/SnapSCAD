@@ -27,6 +27,15 @@ from .fea import (
     ThermalWarpingReport,
 )
 from .multimaterial import export_multimaterial_3mf
+from .lattice import (
+    generate_honeycomb_scad,
+    generate_orthogrid_scad,
+    generate_diamond_lattice_scad,
+    generate_gyroid_infill_scad,
+    estimate_lattice_weight_savings,
+    apply_lattice_lightweighting,
+    LatticeReport,
+)
 
 __all__ = [
     "AgentConfig",
@@ -60,6 +69,13 @@ __all__ = [
     "compensate_and_recompile_model",
     "ThermalWarpingReport",
     "export_multimaterial_3mf",
+    "generate_honeycomb_scad",
+    "generate_orthogrid_scad",
+    "generate_diamond_lattice_scad",
+    "generate_gyroid_infill_scad",
+    "estimate_lattice_weight_savings",
+    "apply_lattice_lightweighting",
+    "LatticeReport",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",
