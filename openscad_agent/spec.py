@@ -814,5 +814,99 @@ def resolve_geometric_constraints(spec: dict[str, Any]) -> tuple[dict[str, Any],
     return s, actions
 
 
-__all__ = ["validate_spec", "normalize_part", "normalize_size", "normalize_hole_size",
-           "resolve_geometric_constraints", "PRIMITIVES"]
+#: 工业常识与工程规范先验知识库
+ENGINEERING_PRIORS: dict[str, dict[str, Any]] = {
+    "enclosure": {
+        "name": "电子/机械壳体",
+        "keywords": ["壳", "盒", "外壳", "盒体", "enclosure", "case", "housing", "box"],
+        "min_wall": 1.6,
+        "default_wall": 2.0,
+        "corner_fillet": 2.0,
+        "fastener_std": "M3",
+        "clearance": 0.25,
+    },
+    "bracket": {
+        "name": "承载/安装支架",
+        "keywords": ["支架", "固定板", "安装架", "转接板", "bracket", "mount", "plate", "holder", "stand"],
+        "min_wall": 2.5,
+        "default_wall": 3.0,
+        "corner_fillet": 1.5,
+        "fastener_std": "M4",
+        "clearance": 0.3,
+    },
+    "gear_mechanism": {
+        "name": "齿轮传动机构",
+        "keywords": ["齿轮", "传动", "gear", "sprocket", "pinion", "pulley"],
+        "pressure_angle": 20.0,
+        "backlash": 0.2,
+        "center_bore": 5.0,
+    },
+    "snap_joint": {
+        "name": "免胶卡扣装配",
+        "keywords": ["卡扣", "扣位", "snap", "latch", "clip"],
+        "beam_thickness": 1.5,
+        "snap_gap": 0.3,
+        "lead_angle": 30.0,
+    },
+}
+
+
+def apply_engineering_priors(spec: dict[str, Any], user_hint: str = "") -> tuple[dict[str, Any], list[str]]:
+    """根据模型描述或用户提示词自动匹配并注入工业常识与工程规范先验。
+
+    针对外壳、承载支架、齿轮机构等工业结构：
+    - 自动确保薄壁特征符合增材制造/机械强度下限（壳体壁厚 >= 1.6mm，受力支架 >= 2.5mm）；
+    - 自动补充标准公差配合间隙（0.25~0.3mm）；
+    - 自动注入关键制造参数至 params 字典，便于后续 Customizer 交互微调。
+    """
+    import copy
+
+    s = copy.deepcopy(spec)
+    actions: list[str] = []
+    combined_text = f"{s.get('name', '')} {s.get('description', '')} {user_hint}".lower()
+
+    matched_domain = None
+    domain_cfg = None
+    for domain, cfg in ENGINEERING_PRIORS.items():
+        if any(kw in combined_text for kw in cfg["keywords"]):
+            matched_domain = domain
+            domain_cfg = cfg
+            break
+
+    if not domain_cfg:
+        return s, actions
+
+    params = s.setdefault("params", {})
+    parts = s.setdefault("parts", [])
+
+    if "min_wall" in domain_cfg and "wall_thickness" not in params:
+        params["wall_thickness"] = domain_cfg["default_wall"]
+        actions.append(f"注入 {domain_cfg['name']} 推荐壁厚 wall_thickness = {domain_cfg['default_wall']}mm")
+
+    if "clearance" in domain_cfg and "fit_clearance" not in params:
+        params["fit_clearance"] = domain_cfg["clearance"]
+        actions.append(f"注入 {domain_cfg['name']} 装配配合公差 fit_clearance = {domain_cfg['clearance']}mm")
+
+    min_wall = domain_cfg.get("min_wall", 1.6)
+    for p in parts:
+        pid = p.get("id", "part")
+        prim = (p.get("primitive") or "cube").lower()
+        sz = p.get("size")
+        if isinstance(sz, list) and len(sz) >= 3 and prim in ("cube", "cuboid", "box"):
+            modified = False
+            for axis in range(3):
+                val = float(sz[axis])
+                if 0.1 < val < min_wall:
+                    sz[axis] = min_wall
+                    modified = True
+            if modified:
+                actions.append(f"加固部件 {pid} 薄壁尺寸至工程安全阈值 ({min_wall}mm)")
+
+    return s, actions
+
+
+__all__ = [
+    "validate_spec", "normalize_part", "normalize_size", "normalize_hole_size",
+    "resolve_geometric_constraints", "apply_engineering_priors", "ENGINEERING_PRIORS",
+    "PRIMITIVES"
+]

@@ -199,6 +199,12 @@ class OpenscadAgent:
         errors: list[str] = []
         rounds = 0
 
+        # 2.5 工业常识与工程规范先验注入 (Engineering Priors Injection)
+        from .spec import apply_engineering_priors
+        spec, prior_actions = apply_engineering_priors(spec, user_hint=hint)
+        if prior_actions:
+            _log.info("[agent] 已注入工业常识先验: %s", ", ".join(prior_actions))
+
         # 3. 生成源码 + 校验
         spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
         scad_path = Path(scad_path_str)
