@@ -9,6 +9,8 @@ venv/
 out/
 out_test/
 _dist/
+*.log
+result.json
 
 # 编辑器/系统
 .vscode/

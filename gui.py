@@ -193,8 +193,11 @@ class MainWindow(QMainWindow):
             "view_3d": "🎮 3D 交互视口",
             "btn_open_scad": "🚀 在 OpenSCAD 中打开 3D 模型",
             "btn_web_viewer": "🌐 网页 3D 查看器",
+            "btn_workspace": "🌐 协同工作台",
             "btn_gallery": "🏛️ 3D 展厅画廊",
             "btn_dxf": "📐 激光切割 DXF",
+            "btn_slice": "🍰 切片 G-code",
+            "btn_export_lib": "📦 导出生态库",
             "btn_zip": "📦 打包工程 ZIP",
             "btn_printer": "🖨️ 发送至打印机",
             "btn_serve": "📡 局域网分享",
@@ -226,8 +229,11 @@ class MainWindow(QMainWindow):
             "view_3d": "🎮 3D Viewport",
             "btn_open_scad": "🚀 Open in OpenSCAD",
             "btn_web_viewer": "🌐 Web 3D Viewer",
+            "btn_workspace": "🌐 Web Workspace",
             "btn_gallery": "🏛️ 3D Showcase Gallery",
             "btn_dxf": "📐 Laser Cut DXF",
+            "btn_slice": "🍰 Slice G-code",
+            "btn_export_lib": "📦 Export Library",
             "btn_zip": "📦 Export Project ZIP",
             "btn_printer": "🖨️ Send to 3D Printer",
             "btn_serve": "📡 LAN Share",
@@ -720,6 +726,10 @@ class MainWindow(QMainWindow):
         self.btn_open_web.clicked.connect(self.on_open_web_viewer)
         act_bar.addWidget(self.btn_open_web)
 
+        self.btn_workspace = QPushButton("🌐 协同工作台")
+        self.btn_workspace.clicked.connect(self.on_open_workspace)
+        act_bar.addWidget(self.btn_workspace)
+
         self.btn_gallery = QPushButton("🏛️ 3D 展厅画廊")
         self.btn_gallery.clicked.connect(self.on_open_gallery)
         act_bar.addWidget(self.btn_gallery)
@@ -727,6 +737,14 @@ class MainWindow(QMainWindow):
         self.btn_export_dxf = QPushButton("📐 激光切割 DXF")
         self.btn_export_dxf.clicked.connect(self.on_export_dxf)
         act_bar.addWidget(self.btn_export_dxf)
+
+        self.btn_slice = QPushButton("🍰 切片 G-code")
+        self.btn_slice.clicked.connect(self.on_slice_model)
+        act_bar.addWidget(self.btn_slice)
+
+        self.btn_export_lib = QPushButton("📦 导出生态库")
+        self.btn_export_lib.clicked.connect(self.on_export_library)
+        act_bar.addWidget(self.btn_export_lib)
 
         self.btn_pack_zip = QPushButton("📦 打包工程 ZIP")
         self.btn_pack_zip.clicked.connect(self.on_package_zip)
@@ -819,8 +837,11 @@ class MainWindow(QMainWindow):
         self.btn_view_3d.setText(d.get("view_3d", "🎮 3D 交互视口"))
         self.btn_open_scad.setText(d["btn_open_scad"])
         self.btn_open_web.setText(d["btn_web_viewer"])
+        self.btn_workspace.setText(d["btn_workspace"])
         self.btn_gallery.setText(d["btn_gallery"])
         self.btn_export_dxf.setText(d["btn_dxf"])
+        self.btn_slice.setText(d["btn_slice"])
+        self.btn_export_lib.setText(d["btn_export_lib"])
         self.btn_pack_zip.setText(d["btn_zip"])
         self.btn_send_printer.setText(d["btn_printer"])
         self.btn_serve.setText(d["btn_serve"])
@@ -1374,6 +1395,80 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"2D 投影导出异常: {e}")
 
+    def on_slice_model(self) -> None:
+        """为当前模型直接生成生产级切片 G-code 并核算打印制造指标。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成 OpenSCAD 文件。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        stl_p = scad_p.with_suffix(".stl")
+        if not stl_p.exists():
+            QMessageBox.information(self, "提示", f"未找到可切片的 STL 模型文件 ({stl_p.name})。请先渲染导出 3D 模型。")
+            return
+
+        materials = ["PLA", "PETG", "ABS", "TPU", "PC"]
+        cur_mat = getattr(self._agent.config, "material", "PLA") if self._agent else "PLA"
+        idx = materials.index(cur_mat) if cur_mat in materials else 0
+        mat, ok = QInputDialog.getItem(self, "选择切片耗材类型", "请选择 3D 打印推荐耗材物性模板:", materials, idx, False)
+        if not ok or not mat:
+            return
+
+        from openscad_agent.slicer import slice_model, SlicingConfig
+        gcode_p = scad_p.with_suffix(".gcode")
+        try:
+            s_cfg = SlicingConfig(material=mat, layer_height=0.2, infill_density=15)
+            self.log(f"🍰 正在调用切片引擎生成 G-code ({mat}, 层高 0.2mm, 填充 15%)…")
+            res = slice_model(stl_p, out_gcode=gcode_p, config=s_cfg, force=True)
+            if res.success:
+                self.log(f"✅ 切片成功: {gcode_p.name} (耗时: {res.estimated_time_formatted}, 耗材: {res.filament_weight_grams}g, 层数: {res.layer_count})")
+                self._refresh_file_list(scad_p.parent)
+                QMessageBox.information(
+                    self, "切片成功",
+                    f"物理切片文件已生成:\n{gcode_p.name}\n\n"
+                    f"⏱️ 预估打印耗时: {res.estimated_time_formatted}\n"
+                    f"⚖️ 耗材消耗克重: {res.filament_weight_grams} g ({res.filament_length_meters} m)\n"
+                    f"📐 物理切片总层数: {res.layer_count} 层 (层高 0.2mm)\n"
+                    f"⚙️ 调度切片引擎: {res.slicer_engine}"
+                )
+            else:
+                QMessageBox.warning(self, "切片未完成", f"切片引擎报错:\n{res.error_msg}")
+        except Exception as e:
+            QMessageBox.warning(self, "切片失败", f"切片异常: {e}")
+
+    def on_export_library(self) -> None:
+        """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成 OpenSCAD 文件。请先完成一次建模。")
+            return
+        from openscad_agent.packager import export_scad_library
+        try:
+            lib_p = export_scad_library(self._scad_path)
+            self.log(f"📦 OpenSCAD 模块生态包导出成功: {lib_p.name} (位于 {lib_p.parent.name}/)")
+            self._refresh_file_list(Path(self._scad_path).parent)
+            QMessageBox.information(
+                self, "生态包导出成功",
+                f"已生成符合工业标准的 OpenSCAD 可复用模块库:\n{lib_p}\n\n"
+                f"包含:\n"
+                f"  - 核心生态库: {lib_p.name} (带命名空间隔离与可调入参)\n"
+                f"  - 调用示例: example.scad (直接可编译)\n"
+                f"  - 接口文档: README.md\n"
+                f"  - 完整归档包: {lib_p.stem}_bundle.zip"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", f"生态包导出异常: {e}")
+
+    def on_open_workspace(self) -> None:
+        """打开浏览器端在线协同 3D WebGL 建模工作台。"""
+        out_dir = Path(self.txt_outdir.text().strip() or "out").resolve()
+        from openscad_agent.workspace import generate_workspace_html
+        try:
+            ws_p = generate_workspace_html(out_dir)
+            import webbrowser
+            webbrowser.open(ws_p.as_uri())
+            self.log(f"🌐 已在浏览器中打开在线协同建模工作台: {ws_p.name}")
+        except Exception as e:
+            QMessageBox.warning(self, "打开工作台失败", f"工作台生成异常: {e}")
+
     def on_package_zip(self) -> None:
         """把当前模型全套工程资产一键打包为 ZIP 归档。"""
         if not self._scad_path or not Path(self._scad_path).exists():
@@ -1389,24 +1484,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "打包失败", f"工程打包异常: {e}")
 
     def on_send_to_printer(self) -> None:
-        """一键将切片文件 (3MF 或 STL) 推送至局域网 Klipper (Moonraker) 或 OctoPrint 打印机。"""
+        """一键将切片文件 (G-code, 3MF 或 STL) 推送至局域网 Klipper / OctoPrint / 拓竹 打印机。"""
         if not self._scad_path:
             QMessageBox.information(self, "提示", "尚未生成模型文件。请先完成建模。")
             return
         scad_p = Path(self._scad_path)
-        # 优选 3MF 现代切片格式，次选二进制 STL
-        target_f = scad_p.with_suffix(".3mf")
+        # 优选真实切片 G-code，次选 3MF 现代格式，再次选二进制 STL
+        target_f = scad_p.with_suffix(".gcode")
+        if not target_f.exists():
+            target_f = scad_p.with_suffix(".3mf")
         if not target_f.exists():
             target_f = scad_p.with_suffix(".stl")
         if not target_f.exists():
-            QMessageBox.information(self, "提示", "未找到可供打印的 3MF 或 STL 模型文件。")
+            QMessageBox.information(self, "提示", "未找到可供打印的 G-code、3MF 或 STL 模型文件。")
             return
 
         from openscad_agent.core import upload_to_3d_printer
         saved_url = self._settings.value("printer_url", "http://mainsail.local:7125")
         url, ok = QInputDialog.getText(
             self, "推送至 3D 打印机",
-            f"请输入局域网 3D 打印机主机地址 (Moonraker / OctoPrint):\n将上传: {target_f.name}",
+            f"请输入局域网 3D 打印机地址 (Klipper / OctoPrint / 拓竹 IP):\n将上传: {target_f.name}",
             QLineEdit.EchoMode.Normal, saved_url
         )
         if not ok or not url.strip():
@@ -1415,7 +1512,7 @@ class MainWindow(QMainWindow):
         url = url.strip()
         self._settings.setValue("printer_url", url)
         self.log(f"正在向打印机推送文件: {url} <- {target_f.name}…")
-        success, msg = upload_to_3d_printer(target_f, server_url=url, timeout=6)
+        success, msg = upload_to_3d_printer(target_f, server_url=url, timeout=10)
         if success:
             QMessageBox.information(self, "推送成功", msg)
             self.log(f"✅ {msg}")
