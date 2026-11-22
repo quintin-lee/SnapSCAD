@@ -770,6 +770,10 @@ class MainWindow(QMainWindow):
         self.btn_lattice.clicked.connect(self.on_apply_lattice_lightweighting)
         act_bar.addWidget(self.btn_lattice)
 
+        self.btn_export_sop = QPushButton("🛠️ 装配工艺 SOP")
+        self.btn_export_sop.clicked.connect(self.on_export_assembly_sop)
+        act_bar.addWidget(self.btn_export_sop)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1682,6 +1686,38 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "减重失败", f"轻量化处理异常: {e}")
+
+    def on_export_assembly_sop(self) -> None:
+        """从当前模型规格自动推导装配拓扑时序并导出工业标准作业指导书 (SOP HTML)。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        from openscad_agent.assembly_sop import derive_assembly_sequence, generate_sop_guide_html
+        try:
+            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            plan = derive_assembly_sequence(spec)
+            out_sop = scad_p.with_name(f"{scad_p.stem}_sop.html")
+            generate_sop_guide_html(plan, out_sop)
+            self.log(f"🛠️ 工业标准装配工艺指导书已生成: {out_sop.name} (工步数={plan.total_steps})")
+            self._refresh_file_list(scad_p.parent)
+            reply = QMessageBox.question(
+                self, "装配指导书生成成功",
+                f"已生成工业级标准作业指导书 (SOP):\n• {out_sop.name}\n"
+                f"• 规划工步: {plan.total_steps} 步 (含 BOM 清单与无碰撞脱出向量)\n\n"
+                f"是否立即在浏览器中打开查看？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_sop)))
+        except Exception as e:
+            QMessageBox.warning(self, "生成失败", f"导出装配指导书异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

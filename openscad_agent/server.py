@@ -138,6 +138,7 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                         "has_stl": (out_dir / f"{stem}.stl").exists(),
                         "has_3mf": (out_dir / f"{stem}.3mf").exists(),
                         "has_multi_3mf": (out_dir / f"{stem}_multimaterial.3mf").exists(),
+                        "has_sop": (out_dir / f"{stem}_sop.html").exists(),
                         "has_gcode": (out_dir / f"{stem}.gcode").exists(),
                         "has_blueprint": (out_dir / f"{stem}_blueprint.svg").exists(),
                         "has_viewer": (out_dir / f"{stem}_viewer.html").exists(),
@@ -191,6 +192,23 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                     return
                 else:
                     self.send_json({"error": f"模型 '{stem}' 未找到工程图纸"}, status=404)
+                    return
+
+            if rest.endswith("/assembly_sop"):
+                stem = rest.replace("/assembly_sop", "").strip()
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        from .assembly_sop import derive_assembly_sequence
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                        plan = derive_assembly_sequence(spec)
+                        self.send_json(plan.to_dict())
+                        return
+                    except Exception as e:
+                        self.send_json({"error": f"推导装配工艺时序失败: {e}"}, status=500)
+                        return
+                else:
+                    self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
                     return
 
             stem = rest
@@ -601,6 +619,32 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        if clean_path == "/api/assembly_sop/generate":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少 stem 名称"}, status=400)
+                return
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                self.send_json({"error": f"未找到模型规格: {stem}_spec.json"}, status=404)
+                return
+            from .assembly_sop import derive_assembly_sequence, generate_sop_guide_html
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                plan = derive_assembly_sequence(spec)
+                out_sop = out_dir / f"{stem}_sop.html"
+                generate_sop_guide_html(plan, out_sop)
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "sop_html": out_sop.name,
+                    "total_steps": plan.total_steps,
+                    "plan": plan.to_dict(),
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -865,6 +909,43 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 w, l, h = (float(sz[0]), float(sz[1]), float(sz[2])) if len(sz) >= 3 else (50.0, 40.0, 10.0)
                 rep = estimate_lattice_weight_savings(w, l, h, pattern=pat, cell_size=c_sz, wall_thickness=w_th)
                 return {"success": True, "actions": actions, "report": rep.to_dict()}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/model/{stem}/assembly_sop")
+        def get_model_assembly_sop(stem: str) -> dict[str, Any]:
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .assembly_sop import derive_assembly_sequence
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                plan = derive_assembly_sequence(spec)
+                return plan.to_dict()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/assembly_sop/generate")
+        def assembly_sop_generate_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .assembly_sop import derive_assembly_sequence, generate_sop_guide_html
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                plan = derive_assembly_sequence(spec)
+                out_sop = out_dir / f"{stem}_sop.html"
+                generate_sop_guide_html(plan, out_sop)
+                return {
+                    "success": True,
+                    "stem": stem,
+                    "sop_html": out_sop.name,
+                    "total_steps": plan.total_steps,
+                    "plan": plan.to_dict(),
+                }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

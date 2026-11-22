@@ -36,6 +36,13 @@ from .lattice import (
     apply_lattice_lightweighting,
     LatticeReport,
 )
+from .assembly_sop import (
+    AssemblyStep,
+    AssemblySequencePlan,
+    derive_assembly_sequence,
+    generate_assembly_animation_scad,
+    generate_sop_guide_html,
+)
 
 __all__ = [
     "AgentConfig",
@@ -76,6 +83,11 @@ __all__ = [
     "estimate_lattice_weight_savings",
     "apply_lattice_lightweighting",
     "LatticeReport",
+    "AssemblyStep",
+    "AssemblySequencePlan",
+    "derive_assembly_sequence",
+    "generate_assembly_animation_scad",
+    "generate_sop_guide_html",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

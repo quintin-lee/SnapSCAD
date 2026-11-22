@@ -265,6 +265,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
     <button onclick="triggerCompile()" class="btn-accent">⚡ 重新编译 (F5)</button>
     <button onclick="triggerSlice()">🍰 切片 G-code</button>
     <button onclick="triggerExportMulti3MF()" style="background:#db2777">🎨 多色 3MF</button>
+    <button onclick="triggerExportSOP()" style="background:#7c3aed">🛠️ 装配 SOP</button>
     <button onclick="triggerExportBlueprint()" style="background:#0284c7">📐 工程图纸</button>
     <button onclick="triggerExportStep()" style="background:#059669">📐 导出 STEP</button>
     <button onclick="triggerExportLib()" style="background:#4b5563">📦 导出生态库</button>
@@ -282,6 +283,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-motion', this)">🎮 机构仿真</button>
       <button class="tab-btn" onclick="switchTab('tab-fea', this)">🌡️ 热力与公差</button>
       <button class="tab-btn" onclick="switchTab('tab-lattice', this)">🪶 减重晶格</button>
+      <button class="tab-btn" onclick="switchTab('tab-sop', this)">🛠️ 装配工艺</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -453,6 +455,36 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <button onclick="triggerApplyLattice()" class="btn-accent" style="width:100%;margin-top:4px;background:#0d9488;">⚡ 应用拓扑减重并重新编译</button>
       </div>
     </div>
+
+    <!-- 工业级装配工艺 SOP 与分步拆解面板 -->
+    <div id="tab-sop" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🛠️ 装配工艺与分步拆解 (SOP Timeline)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        依据构件物理依赖拓扑，推导无干涉拆解路径与标准化装配工步。
+      </div>
+      <div id="sop-stepper-box" style="background:var(--bg-card);padding:10px;border-radius:6px;border:1px solid var(--border);display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:600;color:var(--accent);" id="sop-step-badge">工步 01 / 01</span>
+          <span style="font-size:0.75rem;color:var(--text-muted);" id="sop-action-type">准备基准</span>
+        </div>
+        <div id="sop-instruction-text" style="font-size:0.85rem;color:var(--text);line-height:1.4;">正在读取装配工艺时序方案...</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+          <span style="font-size:0.75rem;color:var(--text-muted);">装配工具:</span>
+          <span id="sop-tools-text" style="font-size:0.75rem;color:#10b981;font-weight:600;">-</span>
+        </div>
+        <input type="range" id="sop-step-slider" min="1" max="1" value="1" oninput="onSOPStepChange(this.value)" style="width:100%;cursor:pointer;">
+        <div style="display:flex;gap:6px;margin-top:4px;">
+          <button onclick="prevSOPStep()" style="flex:1;background:var(--bg-card);border:1px solid var(--border)">⏮️ 上一步</button>
+          <button onclick="toggleSOPAutoPlay()" id="btn-sop-play" class="btn-accent" style="flex:1">▶ 自动演示</button>
+          <button onclick="nextSOPStep()" style="flex:1;background:var(--bg-card);border:1px solid var(--border)">⏭️ 下一步</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
+        <button onclick="triggerExportSOP()" style="width:100%;background:#7c3aed;color:#ffffff;border:none;padding:8px;border-radius:6px;cursor:pointer;font-weight:600;">📋 导出标准作业指导书 (SOP HTML)</button>
+      </div>
+    </div>
   </div>
 
   <!-- 中间 3D WebGL 视口 -->
@@ -559,6 +591,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
           <a id="btn-dl-step" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#34d399;text-decoration:none;font-size:0.85rem">📐 下载 STEP 工业模型</a>
           <a id="btn-dl-multi3mf" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#f472b6;text-decoration:none;font-size:0.85rem">🎨 下载多色 3MF (MMU)</a>
           <a id="btn-dl-blueprint" href="#" target="_blank" class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#38bdf8;text-decoration:none;font-size:0.85rem">📐 查看工程图纸 (SVG)</a>
+          <a id="btn-dl-sop" href="#" target="_blank" class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#a78bfa;text-decoration:none;font-size:0.85rem">🛠️ 查看装配指导书 (SOP)</a>
           <a id="btn-dl-gcode" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--accent);text-decoration:none;font-size:0.85rem">⚡ 下载切片 G-code</a>
           <a id="btn-dl-freecad" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">🐍 下载 FreeCAD 脚本</a>
           <a id="btn-dl-zip" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">📦 打包全套 ZIP</a>
@@ -586,6 +619,10 @@ let isSimulating = false;
 let simT = 0.0;
 let simSpeed = 1.0;
 let activeJoints = [];
+let currentSOPPlan = null;
+let currentSOPStep = 1;
+let isSOPPlaying = false;
+let sopTimer = null;
 
 function init3D() {
   const container = document.getElementById('webgl-canvas');
@@ -942,6 +979,7 @@ async function loadModelDetail(stem) {
   document.getElementById('btn-dl-step').href = stem + '.step';
   document.getElementById('btn-dl-multi3mf').href = stem + '_multimaterial.3mf';
   document.getElementById('btn-dl-blueprint').href = '/api/model/' + stem + '/blueprint';
+  document.getElementById('btn-dl-sop').href = stem + '_sop.html';
   document.getElementById('btn-dl-gcode').href = stem + '.gcode';
   document.getElementById('btn-dl-freecad').href = stem + '_freecad.py';
   document.getElementById('btn-dl-zip').href = stem + '_project.zip';
@@ -975,6 +1013,15 @@ async function loadModelDetail(stem) {
   } catch (e) {
     console.warn('读取模型规格失败:', e);
   }
+
+  // 读取装配工艺时序方案 (SOP)
+  try {
+    const rSop = await fetch('/api/model/' + stem + '/assembly_sop');
+    if (rSop.ok) {
+      currentSOPPlan = await rSop.json();
+      renderSOPControls(currentSOPPlan);
+    }
+  } catch (_) {}
 }
 
 function renderJointControls(joints) {
@@ -1538,6 +1585,100 @@ async function triggerApplyLattice() {
     }
   } catch (e) {
     alert('请求异常: ' + e);
+  }
+}
+
+function renderSOPControls(plan) {
+  if (!plan || !plan.steps || plan.steps.length === 0) return;
+  currentSOPPlan = plan;
+  const slider = document.getElementById('sop-step-slider');
+  slider.min = 1;
+  slider.max = plan.total_steps;
+  slider.value = 1;
+  currentSOPStep = 1;
+  updateSOPStepUI(1);
+}
+
+function updateSOPStepUI(stepNum) {
+  if (!currentSOPPlan || !currentSOPPlan.steps) return;
+  currentSOPStep = parseInt(stepNum);
+  const total = currentSOPPlan.total_steps;
+  const s = currentSOPPlan.steps[currentSOPStep - 1];
+  if (!s) return;
+  document.getElementById('sop-step-badge').innerText = `工步 ${s.step_index < 10 ? '0' : ''}${s.step_index} / ${total < 10 ? '0' : ''}${total}`;
+  document.getElementById('sop-action-type').innerText = s.action;
+  document.getElementById('sop-instruction-text').innerText = s.instruction;
+  document.getElementById('sop-tools-text').innerText = (s.tools_required && s.tools_required.length > 0) ? s.tools_required.join('、') : '徒手装配';
+  document.getElementById('sop-step-slider').value = currentSOPStep;
+
+  // 联动爆炸展开比例以辅助当前装配工步观察
+  const explodeSlider = document.getElementById('param-explode');
+  if (explodeSlider && currentMesh) {
+    const progress = (currentSOPStep - 1) / Math.max(1, total - 1);
+    const expVal = (1.5 * (1.0 - progress)).toFixed(2);
+    explodeSlider.value = expVal;
+    updateParamVal('explode', expVal);
+  }
+}
+
+function onSOPStepChange(val) {
+  updateSOPStepUI(val);
+}
+
+function prevSOPStep() {
+  if (currentSOPStep > 1) {
+    updateSOPStepUI(currentSOPStep - 1);
+  }
+}
+
+function nextSOPStep() {
+  if (currentSOPPlan && currentSOPStep < currentSOPPlan.total_steps) {
+    updateSOPStepUI(currentSOPStep + 1);
+  }
+}
+
+function toggleSOPAutoPlay() {
+  const btn = document.getElementById('btn-sop-play');
+  if (isSOPPlaying) {
+    clearInterval(sopTimer);
+    isSOPPlaying = false;
+    btn.innerText = '▶ 自动演示';
+  } else {
+    isSOPPlaying = true;
+    btn.innerText = '⏸ 暂停演示';
+    sopTimer = setInterval(() => {
+      if (!currentSOPPlan) return;
+      if (currentSOPStep >= currentSOPPlan.total_steps) {
+        currentSOPStep = 1;
+      } else {
+        currentSOPStep++;
+      }
+      updateSOPStepUI(currentSOPStep);
+    }, 2000);
+  }
+}
+
+async function triggerExportSOP() {
+  alert('正在推导装配拓扑时序并生成标准作业指导书 (SOP HTML)...');
+  try {
+    const res = await fetch('/api/assembly_sop/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ 标准装配作业指导书 (SOP) 已就绪: ${data.sop_html}\n共规划 ${data.total_steps} 个无碰撞装配工步与 BOM 清单！\n将在新标签页中打开工艺指导书！`);
+      window.open(data.sop_html, '_blank');
+      document.getElementById('btn-dl-sop').href = data.sop_html;
+      if (data.plan) {
+        renderSOPControls(data.plan);
+      }
+    } else {
+      alert('❌ 导出 SOP 失败: ' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('导出 SOP 异常: ' + e);
   }
 }
 

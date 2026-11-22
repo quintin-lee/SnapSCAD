@@ -1952,6 +1952,95 @@ def test_cellular_lattice_and_lightweighting():
             stop_server()
 
 
+def test_assembly_sop_and_exploded_sequence():
+    """测试 42: 工业级装配体爆炸图拆解路径推导与 3D 装配工艺流程引擎 (assembly_sop)"""
+    from openscad_agent.assembly_sop import (
+        derive_assembly_sequence,
+        generate_assembly_animation_scad,
+        generate_sop_guide_html,
+        AssemblySequencePlan,
+    )
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    spec_box = {
+        "name": "gear_reducer_box",
+        "parts": [
+            {"id": "chassis_base", "primitive": "cube", "size": [80, 60, 10], "center": [0, 0, 0]},
+            {"id": "support_pillar", "primitive": "cylinder", "size": [8, 30], "center": [20, 15, 10]},
+            {"id": "spur_gear", "primitive": "gear", "size": [30, 8], "center": [20, 15, 25]},
+            {"id": "top_cover", "primitive": "cube", "size": [80, 60, 4], "center": [0, 0, 40]},
+            {"id": "fastener_bolt_m4", "primitive": "thread", "size": [4, 15], "center": [30, 20, 42]},
+        ],
+    }
+
+    # 1. 验证装配拓扑时序打分推导
+    plan = derive_assembly_sequence(spec_box)
+    assert plan.total_steps == 5
+    step_ids = [s.part_id for s in plan.steps]
+
+    # 基座第一步装配
+    assert step_ids[0] == "chassis_base"
+    assert plan.steps[0].action == "place_base"
+
+    # 螺栓最后一步紧固
+    assert step_ids[-1] == "fastener_bolt_m4"
+    assert plan.steps[-1].action == "fasten_bolt"
+
+    # 顶盖在功能齿轮之后安装
+    idx_gear = step_ids.index("spur_gear")
+    idx_cover = step_ids.index("top_cover")
+    assert idx_gear < idx_cover
+
+    # 验证脱出向量: 顶盖向上 (+Z) 脱出
+    cover_step = next(s for s in plan.steps if s.part_id == "top_cover")
+    assert cover_step.withdrawal_vector == [0.0, 0.0, 1.0]
+
+    # 2. 验证分步动画 OpenSCAD 脚本生成
+    anim_scad = generate_assembly_animation_scad(spec_box, plan)
+    assert "current_step = $t * total_steps;" in anim_scad
+    assert "smooth_step" in anim_scad
+    assert "offset_top_cover" in anim_scad
+
+    # 3. 验证 SOP HTML 工艺指导书生成
+    with tempfile.TemporaryDirectory() as td:
+        work_dir = Path(td)
+        out_html = work_dir / "gear_reducer_box_sop.html"
+        res_p = generate_sop_guide_html(plan, out_html)
+        assert res_p.exists()
+        html_txt = res_p.read_text(encoding="utf-8")
+        assert "标准装配工艺作业指导书 (SOP)" in html_txt
+        assert "物料清单与装配 BOM" in html_txt
+        assert "chassis_base" in html_txt
+        assert "fastener_bolt_m4" in html_txt
+
+        # 4. 验证微服务 REST API 端点 /api/model/{stem}/assembly_sop 与 /api/assembly_sop/generate
+        spec_f = work_dir / "gear_reducer_box_spec.json"
+        spec_f.write_text(json.dumps(spec_box), encoding="utf-8")
+
+        _, _, port = serve_assets(work_dir, port=8992, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 测试 GET 时序方案接口
+            r_get = requests.get(f"{base}/api/model/gear_reducer_box/assembly_sop", timeout=5)
+            assert r_get.status_code == 200
+            d_plan = r_get.json()
+            assert d_plan["total_steps"] == 5
+            assert len(d_plan["steps"]) == 5
+
+            # 测试 POST 生成 SOP 导出接口
+            r_post = requests.post(f"{base}/api/assembly_sop/generate", json={"stem": "gear_reducer_box"}, timeout=10)
+            assert r_post.status_code == 200
+            d_gen = r_post.json()
+            assert d_gen["success"] is True
+            assert d_gen["total_steps"] == 5
+            assert (work_dir / d_gen["sop_html"]).exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2000,6 +2089,7 @@ def run_all_tests() -> bool:
         ("工业级轻量热力学有限元形变估算与装配公差热缩预补偿 (fea)", test_thermal_warping_analysis_and_tolerance_compensation),
         ("多色多耗材 3MF 生产切片工程文件导出与多喷头工具映射 (mmu)", test_multimaterial_3mf_export_and_slicing_metadata),
         ("轻量化减重拓扑与点阵晶格/蜂窝功能性微结构生成器 (lattice)", test_cellular_lattice_and_lightweighting),
+        ("工业级装配体拆解路径推导与 3D 装配工艺流程引擎 (assembly_sop)", test_assembly_sop_and_exploded_sequence),
     ]
 
     all_ok = True
