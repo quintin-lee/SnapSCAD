@@ -1559,6 +1559,100 @@ def test_dimensioned_technical_blueprint_and_api():
             stop_server()
 
 
+def test_kinematic_joints_and_motion_simulation():
+    """测试 38: 机械机构运动学铰链约束 (Kinematic Joints)、$t 动画转译与 Web 3D 动态仿真"""
+    from openscad_agent.kinematics import parse_joints, compute_joint_pose, KinematicJoint
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+    from openscad_agent.workspace import generate_workspace_html
+
+    # 1. 验证运动学铰链显式解析与前向动力学姿态求值
+    spec_robot = {
+        "name": "robotic_joint",
+        "description": "机械臂单自由度旋转关节与滑动爪",
+        "parts": [
+            {"id": "base_stand", "primitive": "cylinder", "size": [40.0, 15.0], "center": [0, 0, 0]},
+            {"id": "robot_arm", "primitive": "cube", "size": [60.0, 15.0, 10.0], "center": [30, 0, 20]},
+            {"id": "slider_gripper", "primitive": "cube", "size": [10.0, 25.0, 8.0], "center": [50, 0, 20]},
+        ],
+        "joints": [
+            {
+                "id": "joint_elbow",
+                "type": "revolute",
+                "parent": "base_stand",
+                "child": "robot_arm",
+                "pivot": [0.0, 0.0, 20.0],
+                "axis": [0.0, 0.0, 1.0],
+                "limits": [-45.0, 45.0],
+                "speed": 1.0,
+            },
+            {
+                "id": "joint_slide",
+                "type": "prismatic",
+                "parent": "robot_arm",
+                "child": "slider_gripper",
+                "axis": [1.0, 0.0, 0.0],
+                "limits": [0.0, 20.0],
+                "speed": 1.5,
+            }
+        ]
+    }
+
+    joints = parse_joints(spec_robot)
+    assert len(joints) == 2
+    j1, j2 = joints[0], joints[1]
+    assert j1.type == "revolute" and j1.child == "robot_arm"
+    assert j2.type == "prismatic" and j2.child == "slider_gripper"
+
+    # 验证 t=0.0 与 t=0.5 姿态计算
+    pose_t0 = compute_joint_pose(j1, 0.0)
+    assert pose_t0["type"] == "revolute"
+    assert abs(pose_t0["angle_deg"] - (-45.0)) < 1e-3
+
+    pose_t05 = compute_joint_pose(j1, 0.5)
+    assert abs(pose_t05["angle_deg"] - 45.0) < 1e-3
+
+    # 2. 验证智能隐式推断机构运动学铰链
+    spec_inferred = {
+        "name": "door_assembly",
+        "parts": [
+            {"id": "frame", "primitive": "cube", "size": [80, 10, 120], "center": [0, 0, 0]},
+            {"id": "door_panel", "primitive": "cube", "size": [70, 6, 110], "center": [0, 0, 0]},
+        ]
+    }
+    inf_joints = parse_joints(spec_inferred)
+    assert len(inf_joints) == 1
+    assert inf_joints[0].child == "door_panel"
+    assert inf_joints[0].type == "revolute"
+
+    # 3. 验证 OpenSCAD 动态动画源码转译与真实 CGAL 编译
+    scad_code = spec_to_scad(spec_robot)
+    assert "anim_t = $t;" in scad_code
+    assert "anim_smooth" in scad_code
+    assert "rotate(" in scad_code
+    assert "translate(" in scad_code
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        scad_path = out_dir / "robot.scad"
+        scad_path.write_text(scad_code, encoding="utf-8")
+        cfg = AgentConfig(output_dir=td)
+        renderer = OpenscadRenderer(cfg)
+        ok, msg = renderer.validate(scad_path)
+        assert ok, f"带有运动学动画代码的 OpenSCAD 校验失败: {msg}"
+
+        # 4. 验证 Web 协同工作台包含机构运动学仿真控制器
+        ws_file = generate_workspace_html(out_dir)
+        ws_txt = ws_file.read_text(encoding="utf-8")
+        assert "tab-motion" in ws_txt
+        assert "btn-sim-play" in ws_txt
+        assert "sim-timeline" in ws_txt
+        assert "sim-speed" in ws_txt
+        assert "toggleKinematicSimulation" in ws_txt
+        assert "updateKinematicSimulationStep" in ws_txt
+        assert "applyKinematicPose" in ws_txt
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1603,6 +1697,7 @@ def run_all_tests() -> bool:
         ("服务端结构化语法约束解码与容错 JSON 解析 (robust_json_loads)", test_structured_output_and_robust_json_parsing),
         ("工业常识先验规范库与目标 ROI 自动裁剪 (apply_engineering_priors)", test_engineering_priors_and_image_roi_crop),
         ("工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint)", test_dimensioned_technical_blueprint_and_api),
+        ("机械机构运动学铰链约束与 Web 3D 动态仿真 (kinematics)", test_kinematic_joints_and_motion_simulation),
     ]
 
     all_ok = True

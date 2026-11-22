@@ -984,9 +984,22 @@ def spec_to_scad(
     out.append("explode = 0.0; // [0:0.1:3]")
     out.append("")
 
+    # 机构运动学铰链约束与动画参数 (Kinematic Joints & Animation)
+    from .kinematics import parse_joints, generate_kinematic_scad_blocks
+    kin_joints = parse_joints(spec)
+    kin_headers, kin_wrappers = generate_kinematic_scad_blocks(kin_joints)
+    if kin_headers:
+        out += kin_headers
+
     def _render_part_call(pid: str, idx: int, total_count: int, indent: str = "    ") -> str:
         pid_safe = _sanitize_module_name(pid, fallback="part")
         p_obj = part_map.get(pid_safe)
+        kin_wrap = kin_wrappers.get(pid_safe) or kin_wrappers.get(pid)
+        core_call = f"{pid_safe}();"
+        if kin_wrap:
+            pre, suf = kin_wrap
+            core_call = f"{pre}{core_call}{suf}"
+
         if p_obj and total_count > 1:
             p_center = p_obj.get("center", [0, 0, 0])
             pcx = float(p_center[0]) if len(p_center) >= 1 else 0.0
@@ -997,8 +1010,8 @@ def spec_to_scad(
             dz = pcz - avg_cz
             if abs(dx) < 1e-3 and abs(dy) < 1e-3 and abs(dz) < 1e-3:
                 dz = (idx - (total_count - 1) / 2.0) * 20.0
-            return f"{indent}translate(explode * [{_fmt(dx)}, {_fmt(dy)}, {_fmt(dz)}])\n{indent}  {pid_safe}();"
-        return f"{indent}{pid_safe}();"
+            return f"{indent}translate(explode * [{_fmt(dx)}, {_fmt(dy)}, {_fmt(dz)}])\n{indent}  {core_call}"
+        return f"{indent}{core_call}"
 
     # 顶层模型模块
     out.append(f"module {safe_name}() {{")

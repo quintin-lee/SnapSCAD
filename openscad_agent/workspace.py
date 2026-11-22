@@ -278,6 +278,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn active" onclick="switchTab('tab-editor', this)">💻 SCAD 源码</button>
       <button class="tab-btn" onclick="switchTab('tab-params', this)">🎛️ 参数调优</button>
       <button class="tab-btn" onclick="switchTab('tab-patch', this)">✍️ 增量修剪</button>
+      <button class="tab-btn" onclick="switchTab('tab-motion', this)">🎮 机构仿真</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -345,6 +346,29 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <input type="range" id="slice-infill" min="5" max="100" step="5" value="15" oninput="document.getElementById('val-infill').innerText = this.value + ' %'">
       </div>
       <button onclick="triggerSlice()" class="btn-success" style="width:100%;margin-top:10px;">🍰 立即切片生成 G-code</button>
+    </div>
+
+    <!-- 机构运动学动态仿真 -->
+    <div id="tab-motion" class="tab-content">
+      <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">
+        基于拓扑铰链约束 (旋转副 Revolute / 滑动副 Prismatic / 齿轮副 Gear) 的 60 FPS 物理机构运动学动态仿真。
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button id="btn-sim-play" onclick="toggleKinematicSimulation()" class="btn-accent" style="flex:1">▶ 开始仿真</button>
+        <button onclick="resetKinematicSimulation()" style="flex:1;background:var(--bg-card);border:1px solid var(--border)">↺ 重置位姿</button>
+      </div>
+      <div class="form-group">
+        <label>时间轴推进 (Timeline): <span id="sim-t-val">t = 0.00</span></label>
+        <input type="range" id="sim-timeline" min="0" max="1" step="0.005" value="0" oninput="onTimelineScrub(this.value)">
+      </div>
+      <div class="form-group">
+        <label>仿真速度倍率: <span id="sim-speed-val">1.0x</span></label>
+        <input type="range" id="sim-speed" min="0.2" max="3.0" step="0.2" value="1.0" oninput="onSimSpeedChange(this.value)">
+      </div>
+      <div class="metric-title" style="margin-top:14px;margin-bottom:8px;">机构运动副自由度 (Joints)</div>
+      <div id="joint-controls-list" style="display:flex;flex-direction:column;gap:8px;font-size:0.85rem;">
+        <div style="color:var(--text-muted);font-size:0.8rem;">正在加载当前模型运动副...</div>
+      </div>
     </div>
   </div>
 
@@ -474,6 +498,10 @@ let isMeasureMode = false;
 let measurePoints = [];
 let measureMarkers = [];
 let measureLine = null;
+let isSimulating = false;
+let simT = 0.0;
+let simSpeed = 1.0;
+let activeJoints = [];
 
 function init3D() {
   const container = document.getElementById('webgl-canvas');
@@ -532,8 +560,118 @@ function init3D() {
 
 function animate() {
   requestAnimationFrame(animate);
+  if (isSimulating) {
+    updateKinematicSimulationStep();
+  }
   controls.update();
   renderer.render(scene, camera);
+}
+
+// ---------------------------------------------------------------------------
+// 机构运动学 3D 动态仿真 (Kinematic Simulation)
+// ---------------------------------------------------------------------------
+function toggleKinematicSimulation() {
+  isSimulating = !isSimulating;
+  const btn = document.getElementById('btn-sim-play');
+  if (isSimulating) {
+    btn.innerText = '⏸ 暂停仿真';
+    btn.classList.remove('btn-accent');
+    btn.style.background = '#eab308';
+    btn.style.color = '#000000';
+  } else {
+    btn.innerText = '▶ 开始仿真';
+    btn.classList.add('btn-accent');
+    btn.style.background = '';
+    btn.style.color = '';
+  }
+}
+
+function resetKinematicSimulation() {
+  isSimulating = false;
+  simT = 0.0;
+  const btn = document.getElementById('btn-sim-play');
+  if (btn) {
+    btn.innerText = '▶ 开始仿真';
+    btn.classList.add('btn-accent');
+    btn.style.background = '';
+    btn.style.color = '';
+  }
+  const timeline = document.getElementById('sim-timeline');
+  if (timeline) timeline.value = '0';
+  const tVal = document.getElementById('sim-t-val');
+  if (tVal) tVal.innerText = 't = 0.00';
+  applyKinematicPose(0.0);
+}
+
+function onTimelineScrub(val) {
+  simT = parseFloat(val);
+  const tVal = document.getElementById('sim-t-val');
+  if (tVal) tVal.innerText = 't = ' + simT.toFixed(2);
+  applyKinematicPose(simT);
+}
+
+function onSimSpeedChange(val) {
+  simSpeed = parseFloat(val);
+  const sVal = document.getElementById('sim-speed-val');
+  if (sVal) sVal.innerText = simSpeed.toFixed(1) + 'x';
+}
+
+function updateKinematicSimulationStep() {
+  simT = (simT + 0.005 * simSpeed) % 1.0;
+  const timeline = document.getElementById('sim-timeline');
+  if (timeline) timeline.value = simT.toFixed(3);
+  const tVal = document.getElementById('sim-t-val');
+  if (tVal) tVal.innerText = 't = ' + simT.toFixed(2);
+  applyKinematicPose(simT);
+}
+
+function applyKinematicPose(t) {
+  if (!currentMesh) return;
+  const smooth = (1.0 + Math.sin(2.0 * Math.PI * t - Math.PI / 2.0)) / 2.0;
+
+  if (activeJoints && activeJoints.length > 0) {
+    activeJoints.forEach((j, idx) => {
+      const minVal = (j.limits && j.limits.length >= 2) ? j.limits[0] : -45.0;
+      const maxVal = (j.limits && j.limits.length >= 2) ? j.limits[1] : 45.0;
+      const curVal = minVal + smooth * (maxVal - minVal);
+      const valEl = document.getElementById(`joint-val-${idx}`);
+      if (valEl) valEl.innerText = curVal.toFixed(1) + (j.type === 'prismatic' ? ' mm' : '°');
+      const rngEl = document.getElementById(`joint-range-${idx}`);
+      if (rngEl && document.activeElement !== rngEl) rngEl.value = curVal;
+
+      if (j.type === 'prismatic') {
+        const ax = j.axis || [1, 0, 0];
+        currentMesh.position.set(ax[0] * curVal, ax[1] * curVal, ax[2] * curVal);
+      } else {
+        const ax = j.axis || [0, 0, 1];
+        const rad = (curVal * Math.PI) / 180.0;
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(...ax).normalize(), rad);
+        currentMesh.quaternion.copy(q);
+      }
+    });
+  } else {
+    // 默认机构摆动示范
+    const angleRad = (Math.sin(2 * Math.PI * t) * 30.0 * Math.PI) / 180.0;
+    currentMesh.rotation.z = angleRad;
+  }
+}
+
+function onManualJointChange(idx, val) {
+  if (!currentMesh || !activeJoints[idx]) return;
+  const j = activeJoints[idx];
+  const num = parseFloat(val);
+  const valEl = document.getElementById(`joint-val-${idx}`);
+  if (valEl) valEl.innerText = num.toFixed(1) + (j.type === 'prismatic' ? ' mm' : '°');
+
+  if (j.type === 'prismatic') {
+    const ax = j.axis || [1, 0, 0];
+    currentMesh.position.set(ax[0] * num, ax[1] * num, ax[2] * num);
+  } else {
+    const ax = j.axis || [0, 0, 1];
+    const rad = (num * Math.PI) / 180.0;
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(...ax).normalize(), rad);
+    currentMesh.quaternion.copy(q);
+  }
 }
 
 function onWindowResize() {
@@ -733,6 +871,49 @@ async function loadModelDetail(stem) {
 
   // 加载 STL 到 3D 视口
   loadSTL(stem + '.stl');
+
+  // 读取模型规格与机构运动副 (Kinematic Joints)
+  try {
+    const rSpec = await fetch('/api/model/' + stem);
+    let specData = null;
+    if (rSpec.ok) {
+      const resp = await rSpec.json();
+      specData = resp.spec;
+    } else {
+      const rSpecFile = await fetch(stem + '_spec.json');
+      if (rSpecFile.ok) specData = await rSpecFile.json();
+    }
+    if (specData) {
+      activeJoints = specData.joints || (specData.assembly && specData.assembly.joints) || [];
+      renderJointControls(activeJoints);
+    }
+  } catch (e) {
+    console.warn('读取模型规格失败:', e);
+  }
+}
+
+function renderJointControls(joints) {
+  const container = document.getElementById('joint-controls-list');
+  if (!container) return;
+  if (!joints || joints.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">该模型未定义显式铰链约束，仿真模式下将执行整体 Harmonic 动态运动演示。</div>';
+    return;
+  }
+  container.innerHTML = '';
+  joints.forEach((j, idx) => {
+    const minVal = (j.limits && j.limits.length >= 2) ? j.limits[0] : -45.0;
+    const maxVal = (j.limits && j.limits.length >= 2) ? j.limits[1] : 45.0;
+    const card = document.createElement('div');
+    card.style = 'background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.8rem;margin-bottom:4px;">
+        <span style="font-weight:600;color:var(--accent);">${j.id || 'Joint ' + (idx + 1)} (${j.type})</span>
+        <span id="joint-val-${idx}" style="color:var(--text);font-family:monospace;">${minVal}${j.type === 'prismatic' ? ' mm' : '°'}</span>
+      </div>
+      <input type="range" id="joint-range-${idx}" min="${minVal}" max="${maxVal}" step="1" value="${minVal}" oninput="onManualJointChange(${idx}, this.value)" style="width:100%;cursor:pointer;">
+    `;
+    container.appendChild(card);
+  });
 }
 
 function switchViewMode(mode) {
