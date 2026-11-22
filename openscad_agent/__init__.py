@@ -26,6 +26,7 @@ from .fea import (
     compensate_and_recompile_model,
     ThermalWarpingReport,
 )
+from .multimaterial import export_multimaterial_3mf
 
 __all__ = [
     "AgentConfig",
@@ -58,6 +59,7 @@ __all__ = [
     "apply_tolerance_compensation",
     "compensate_and_recompile_model",
     "ThermalWarpingReport",
+    "export_multimaterial_3mf",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

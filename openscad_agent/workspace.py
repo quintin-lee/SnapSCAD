@@ -264,6 +264,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
     <select id="model-select" onchange="onModelChange()"></select>
     <button onclick="triggerCompile()" class="btn-accent">⚡ 重新编译 (F5)</button>
     <button onclick="triggerSlice()">🍰 切片 G-code</button>
+    <button onclick="triggerExportMulti3MF()" style="background:#db2777">🎨 多色 3MF</button>
     <button onclick="triggerExportBlueprint()" style="background:#0284c7">📐 工程图纸</button>
     <button onclick="triggerExportStep()" style="background:#059669">📐 导出 STEP</button>
     <button onclick="triggerExportLib()" style="background:#4b5563">📦 导出生态库</button>
@@ -513,6 +514,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
           <a id="btn-dl-stl" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">⬇️ 下载 STL 模型</a>
           <a id="btn-dl-step" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#34d399;text-decoration:none;font-size:0.85rem">📐 下载 STEP 工业模型</a>
+          <a id="btn-dl-multi3mf" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#f472b6;text-decoration:none;font-size:0.85rem">🎨 下载多色 3MF (MMU)</a>
           <a id="btn-dl-blueprint" href="#" target="_blank" class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:#38bdf8;text-decoration:none;font-size:0.85rem">📐 查看工程图纸 (SVG)</a>
           <a id="btn-dl-gcode" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--accent);text-decoration:none;font-size:0.85rem">⚡ 下载切片 G-code</a>
           <a id="btn-dl-freecad" href="#" download class="btn" style="text-align:center;padding:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;color:var(--text);text-decoration:none;font-size:0.85rem">🐍 下载 FreeCAD 脚本</a>
@@ -895,6 +897,7 @@ async function loadModelDetail(stem) {
   // 更新下载链接
   document.getElementById('btn-dl-stl').href = stem + '.stl';
   document.getElementById('btn-dl-step').href = stem + '.step';
+  document.getElementById('btn-dl-multi3mf').href = stem + '_multimaterial.3mf';
   document.getElementById('btn-dl-blueprint').href = '/api/model/' + stem + '/blueprint';
   document.getElementById('btn-dl-gcode').href = stem + '.gcode';
   document.getElementById('btn-dl-freecad').href = stem + '_freecad.py';
@@ -1321,6 +1324,26 @@ async function triggerDispatch() {
     }
   } catch (e) {
     alert('推送异常: ' + e);
+  }
+}
+
+async function triggerExportMulti3MF() {
+  alert('正在请求微服务生成多色多材质 3MF 制造包 (Bambu Studio / OrcaSlicer / PrusaSlicer MMU)...');
+  try {
+    const res = await fetch('/api/export_multimaterial_3mf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ 多色 3MF 制造工程包已就绪: ${data.file_3mf}\n包含 ${data.parts_count} 个分色独立组件，并已映射工具头颜色！\n已更新右侧面板快速下载直链！`);
+      document.getElementById('btn-dl-multi3mf').href = data.file_3mf;
+    } else {
+      alert('❌ 导出多色 3MF 失败: ' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('导出多色 3MF 异常: ' + e);
   }
 }
 

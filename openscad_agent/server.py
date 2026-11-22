@@ -137,6 +137,7 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                         "desc": spec.get("description", ""),
                         "has_stl": (out_dir / f"{stem}.stl").exists(),
                         "has_3mf": (out_dir / f"{stem}.3mf").exists(),
+                        "has_multi_3mf": (out_dir / f"{stem}_multimaterial.3mf").exists(),
                         "has_gcode": (out_dir / f"{stem}.gcode").exists(),
                         "has_blueprint": (out_dir / f"{stem}_blueprint.svg").exists(),
                         "has_viewer": (out_dir / f"{stem}_viewer.html").exists(),
@@ -510,6 +511,36 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 10. 原生多色多耗材 3MF 生产切片工程导出 (Export Multi-Material 3MF)
+        if clean_path == "/api/export_multimaterial_3mf":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+            cand_spec = out_dir / f"{stem}_spec.json"
+            cand_scad = out_dir / f"{stem}.scad"
+            if not cand_spec.exists() or not cand_scad.exists():
+                self.send_json({"error": f"未找到模型文件: {stem}_spec.json 或 {stem}.scad"}, status=404)
+                return
+            from .multimaterial import export_multimaterial_3mf
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                out_3mf = out_dir / f"{stem}_multimaterial.3mf"
+                extruder_map = body.get("extruder_map")
+                color_map = body.get("color_map")
+                p_3mf = export_multimaterial_3mf(cand_scad, spec, out_3mf, extruder_map=extruder_map, color_map=color_map)
+                parts_len = len(spec.get("parts") or [])
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "file_3mf": out_3mf.name,
+                    "parts_count": parts_len,
+                    "message": "原生多色多耗材 3MF 工程文件已生成，适配拓竹 AMS / Prusa MMU3！",
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -700,6 +731,33 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     stem, out_dir=out_dir, material=material, fit_type=fit_type, recompile=recompile
                 )
                 return {"success": True, "stem": stem, "actions": actions, "spec": comp_spec}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/export_multimaterial_3mf")
+        def export_multimaterial_3mf_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            cand_scad = out_dir / f"{stem}.scad"
+            if not cand_spec.exists() or not cand_scad.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格或源码: {stem}")
+            from .multimaterial import export_multimaterial_3mf
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                out_3mf = out_dir / f"{stem}_multimaterial.3mf"
+                export_multimaterial_3mf(
+                    cand_scad, spec, out_3mf,
+                    extruder_map=body.get("extruder_map"),
+                    color_map=body.get("color_map")
+                )
+                return {
+                    "success": True,
+                    "stem": stem,
+                    "file_3mf": out_3mf.name,
+                    "parts_count": len(spec.get("parts") or []),
+                }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

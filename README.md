@@ -34,6 +34,10 @@
 ```
 
 设计要点：
+- **多色多耗材 3MF 生产制造包与多喷头工具映射 (`multimaterial.py`)**：原生支持拓竹 Bambu Studio (AMS 4~16色)、OrcaSlicer、PrusaSlicer (MMU3/换刀机) 与双喷头 3D 打印；零外部重依赖纯原生生成符合 3MF Core & Material Extension 规范的标准工程包 (`*_multimaterial.3mf`)，自动将装配体各部件离散为独立 Mesh 构件，绑定 `<m:colorgroup>` 调色盘与颜色，并自动映射工具头编号（Extruder 1..N），切片软件直接识别为多构件装配，告别手动油漆桶分色。
+- **工业级轻量热力学离散形变估算与装配公差孔径热缩预补偿 (`fea.py`)**：内置材料物性热膨胀与结晶收缩率数据库（PLA、PETG、ABS、PC、PA-CF/尼龙碳纤等）；自动执行网格化一维/二维热应力弯曲抬升测算与封箱控温建议（`estimate_thermal_warping`）；支持过渡配合 (Normal)、间隙配合 (Loose) 与过盈配合 (Press Fit) 的智能装配补偿（`apply_tolerance_compensation`），根据材料结晶收缩率自动逆向放大零件孔径与外形轮廓，打印成品免二次铰孔打磨直接严丝合缝装配。
+- **机构运动学铰链约束求解与 Web 3D 动态仿真交互 (`kinematics.py`)**：自动识别装配体相对运动副关系（旋转副 `revolute` 与滑动副 `prismatic`），生成符合 OpenSCAD 标准的 `$t` 周期时间变量连续动画代码；Web 协同工作台内置 Three.js 运动学驱动引擎，支持交互式 3D 机构运动仿真、单轴滑块姿态调节与运动行程极限约束。
+- **工业标准机械制图与自动尺寸标注图纸引擎 (`blueprint.py`)**：从模型规格自动投影并生成工业标准工程制图（主视图、俯视图、左视图及轴测图），全自动标注关键形位尺寸、通孔/沉孔引出线标注（Leader Callouts），附带符合 GB/ISO 制图标准的标准化标题栏（Title Block）与材料明细，直出纯矢量 SVG 与高分辨率 PNG。
 - **视觉目标主体 ROI 自动裁剪与去噪 (`auto_crop_roi`)**：预处理阶段自动分析图片背景色域与非主体杂色，将输入照片自适应裁剪至目标主体有效区域 (Region of Interest)，消除桌面杂物与冗余空白背景，使多模态视觉模型聚焦核心几何形体，显著提升长宽比反求精度并压缩视觉 Token。
 - **工业常识先验规范库与自动薄壁加固 (`apply_engineering_priors`)**：内置机械/电子壳体、承载支架、齿轮传动与免胶卡扣等领域的制造公差与工艺规范知识库；根据用户输入或模型语义自动注入标准制造参数（推荐壁厚、配合间隙），自动扫描并将过于单薄的危险壁厚加固至安全阈值（壳体 $\ge 1.6\,\text{mm}$，受力件 $\ge 2.5\,\text{mm}$），杜绝脆弱薄膜与废品打印。
 - **服务端 JSON 结构化语法约束解码与栈式容错解析 (`response_format` & `robust_json_loads`)**：API 交互引入 `response_format={"type": "json_object"}` 强制大模型在 Token 解码阶段锁定合法 JSON 语法（不支持的服务端自动优雅降级）；内置栈式括号追踪算法 `robust_json_loads`，自动清理多余尾逗号并按反序逆向补全因网络中断或 Token 截断导致的未闭合括号，彻底根除 JSON 语法崩溃。

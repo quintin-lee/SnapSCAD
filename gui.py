@@ -758,6 +758,10 @@ class MainWindow(QMainWindow):
         self.btn_export_blueprint.clicked.connect(self.on_export_blueprint)
         act_bar.addWidget(self.btn_export_blueprint)
 
+        self.btn_export_multi_3mf = QPushButton("🎨 导出多色 3MF")
+        self.btn_export_multi_3mf.clicked.connect(self.on_export_multimaterial_3mf)
+        act_bar.addWidget(self.btn_export_multi_3mf)
+
         self.btn_tolerance = QPushButton("🌡️ 热缩与公差补偿")
         self.btn_tolerance.clicked.connect(self.on_tolerance_compensation)
         act_bar.addWidget(self.btn_tolerance)
@@ -1553,6 +1557,32 @@ class MainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_svg)))
         except Exception as e:
             QMessageBox.warning(self, "图纸生成失败", f"生成工程图纸异常: {e}")
+
+    def on_export_multimaterial_3mf(self) -> None:
+        """从当前模型规格与源码中导出多构件多色 3MF 生产切片工程文件 (Bambu Studio / OrcaSlicer / Prusa MMU)。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        from openscad_agent.multimaterial import export_multimaterial_3mf
+        try:
+            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            out_3mf = scad_p.with_name(f"{scad_p.stem}_multimaterial.3mf")
+            res_3mf = export_multimaterial_3mf(scad_p, spec, out_3mf)
+            self.log(f"🎨 多构件多色 3MF 生产切片包已生成: {res_3mf.name}")
+            self._refresh_file_list(scad_p.parent)
+            QMessageBox.information(
+                self, "多色 3MF 导出成功",
+                f"已生成原生多色多耗材 3MF 制造工程包:\n{res_3mf.name}\n\n"
+                f"各分色部件已封装为独立 Mesh 并映射颜色/工具头，可直接在 Bambu Studio、OrcaSlicer 或 PrusaSlicer (MMU) 中一键分配多色喷头打印！"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", f"导出多色 3MF 异常: {e}")
 
     def on_tolerance_compensation(self) -> None:
         """根据耗材收缩率与配合要求，执行智能装配配合公差与孔径热缩反向预补偿。"""

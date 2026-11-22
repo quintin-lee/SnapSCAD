@@ -1748,6 +1748,108 @@ def test_thermal_warping_analysis_and_tolerance_compensation():
             stop_server()
 
 
+def test_multimaterial_3mf_export_and_slicing_metadata():
+    """测试 40: 多色多耗材 3MF 生产切片工程文件导出 (Bambu/OrcaSlicer/Prusa MMU) 与多喷头工具映射"""
+    from openscad_agent.multimaterial import export_multimaterial_3mf, parse_stl_to_mesh
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+    import zipfile
+
+    spec_multi = {
+        "name": "two_color_box",
+        "parts": [
+            {
+                "id": "box_base",
+                "primitive": "cube",
+                "size": [40.0, 30.0, 10.0],
+                "color": "#EF4444",
+            },
+            {
+                "id": "box_lid",
+                "primitive": "cube",
+                "size": [40.0, 30.0, 4.0],
+                "center": [0, 0, 10.0],
+                "color": "#10B981",
+            },
+        ],
+    }
+
+    scad_code = """
+module box_base() {
+    cube([40, 30, 10]);
+}
+
+module box_lid() {
+    translate([0, 0, 10]) cube([40, 30, 4]);
+}
+
+box_base();
+box_lid();
+"""
+
+    with tempfile.TemporaryDirectory() as td:
+        work_dir = Path(td)
+        scad_path = work_dir / "two_color_box.scad"
+        scad_path.write_text(scad_code, encoding="utf-8")
+        out_3mf = work_dir / "two_color_box_multimaterial.3mf"
+
+        # 1. 导出测试
+        res_3mf = export_multimaterial_3mf(
+            scad_path=scad_path,
+            spec=spec_multi,
+            out_3mf=out_3mf,
+            extruder_map={"box_base": 1, "box_lid": 2},
+        )
+        assert res_3mf.exists()
+        assert res_3mf.stat().st_size > 0
+
+        # 2. 校验 3MF OPC 标准压缩包与 XML 语义
+        with zipfile.ZipFile(res_3mf, "r") as zf:
+            namelist = zf.namelist()
+            assert "[Content_Types].xml" in namelist
+            assert "_rels/.rels" in namelist
+            assert "3D/3dmodel.model" in namelist
+
+            model_xml = zf.read("3D/3dmodel.model").decode("utf-8")
+            assert "<m:colorgroup" in model_xml
+            assert "#EF4444" in model_xml
+            assert "#10B981" in model_xml
+            assert 'pid="1"' in model_xml
+            assert "<components>" in model_xml
+            assert "<build>" in model_xml
+
+        # 3. 校验服务端 REST API 端点 /api/export_multimaterial_3mf 与模型列表 has_multi_3mf
+        spec_file = work_dir / "two_color_box_spec.json"
+        spec_file.write_text(json.dumps(spec_multi), encoding="utf-8")
+
+        _, _, port = serve_assets(work_dir, port=8999, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 检查模型列表
+            r_list = requests.get(f"{base}/api/models", timeout=5)
+            assert r_list.status_code == 200
+            m_items = r_list.json()
+            target_item = next((m for m in m_items if m["stem"] == "two_color_box"), None)
+            assert target_item is not None
+            assert target_item["has_multi_3mf"] is True
+
+            # 触发多色 3MF 导出
+            r_exp = requests.post(
+                f"{base}/api/export_multimaterial_3mf",
+                json={"stem": "two_color_box"},
+                timeout=15,
+            )
+            assert r_exp.status_code == 200
+            d_exp = r_exp.json()
+            assert d_exp["success"] is True
+            assert d_exp["parts_count"] == 2
+            assert (work_dir / d_exp["file_3mf"]).exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1794,6 +1896,7 @@ def run_all_tests() -> bool:
         ("工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint)", test_dimensioned_technical_blueprint_and_api),
         ("机械机构运动学铰链约束与 Web 3D 动态仿真 (kinematics)", test_kinematic_joints_and_motion_simulation),
         ("工业级轻量热力学有限元形变估算与装配公差热缩预补偿 (fea)", test_thermal_warping_analysis_and_tolerance_compensation),
+        ("多色多耗材 3MF 生产切片工程文件导出与多喷头工具映射 (mmu)", test_multimaterial_3mf_export_and_slicing_metadata),
     ]
 
     all_ok = True
