@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -199,6 +200,190 @@ def _polyhedron_vertices(part: dict[str, Any], center: list[float], note: str) -
     return lines
 
 
+def _build_thread_mesh(
+    d: float = 8.0,
+    pitch: float = 1.25,
+    length: float = 15.0,
+    pts_per_ring: int = 24,
+    rings_per_pitch: int = 8,
+    tolerance: float = 0.0,
+) -> tuple[list[list[float]], list[list[int]]]:
+    """生成 100% 封闭无自交的 ISO 公制内外螺纹单 polyhedron 拓扑网格。"""
+    r_crest = max((d / 2.0) + tolerance, 0.4)
+    depth = 0.541266 * pitch
+    r_root = max(r_crest - depth, 0.2)
+
+    total_rings = int(math.ceil((length / pitch) * rings_per_pitch)) + 1
+    dz = length / (total_rings - 1)
+    d_theta = 2.0 * math.pi / pts_per_ring
+
+    points: list[list[float]] = []
+    for j in range(total_rings):
+        z = j * dz
+        taper_len = pitch * 0.8
+        taper = 1.0
+        if z < taper_len:
+            taper = z / taper_len
+        elif z > length - taper_len:
+            taper = (length - z) / taper_len
+        taper = max(min(taper, 1.0), 0.0)
+
+        for i in range(pts_per_ring):
+            theta = i * d_theta
+            phi = ((z / pitch) - (theta / (2.0 * math.pi))) % 1.0
+            if phi < 0.375:
+                r_val = r_root + (phi / 0.375) * (r_crest - r_root)
+            elif phi < 0.625:
+                r_val = r_crest
+            else:
+                r_val = r_crest - ((phi - 0.625) / 0.375) * (r_crest - r_root)
+
+            r_eff = r_root + (r_val - r_root) * taper
+            x = r_eff * math.cos(theta)
+            y = r_eff * math.sin(theta)
+            points.append([round(x, 4), round(y, 4), round(z, 4)])
+
+    faces: list[list[int]] = []
+    P = pts_per_ring
+    N = total_rings
+
+    for j in range(N - 1):
+        for i in range(P):
+            i_next = (i + 1) % P
+            v0 = j * P + i
+            v1 = (j + 1) * P + i
+            v2 = (j + 1) * P + i_next
+            v3 = j * P + i_next
+            faces.append([v0, v3, v2])
+            faces.append([v0, v2, v1])
+
+    c_bot = N * P
+    points.append([0.0, 0.0, 0.0])
+    for i in range(P):
+        i_next = (i + 1) % P
+        faces.append([c_bot, i_next, i])
+
+    c_top = N * P + 1
+    points.append([0.0, 0.0, round(length, 4)])
+    top_base = (N - 1) * P
+    for i in range(P):
+        i_next = (i + 1) % P
+        faces.append([c_top, top_base + i, top_base + i_next])
+
+    return points, faces
+
+
+def _thread_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """ISO 公制公称螺纹生成器（支持标准外螺栓螺柱与内螺纹螺母套筒）。"""
+    d = float(size[0]) if size else 8.0
+    pitch = float(size[1]) if len(size) >= 2 else 1.25
+    length = float(size[2]) if len(size) >= 3 else 15.0
+    tol = float(size[3]) if len(size) >= 4 else 0.0
+    internal = bool(size[4] > 0.5) if len(size) >= 5 else False
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    pts, fcs = _build_thread_mesh(d, pitch, length, tolerance=tol)
+    pts_str = json.dumps(pts)
+    fcs_str = json.dumps(fcs)
+
+    lines: list[str] = [
+        f"  // {note}" if note else f"  // ISO metric thread: M{_fmt(d)}x{_fmt(pitch)} L={_fmt(length)} ({'internal' if internal else 'external'})"
+    ]
+    if internal:
+        nut_d = max(d * 1.8, d + 6.0)
+        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}]) {{")
+        lines.append("    difference() {")
+        lines.append(f"      cylinder(d = {_fmt(nut_d)}, h = {_fmt(length)}, $fn = 6, center = false);")
+        lines.append(f"      polyhedron(points = {pts_str}, faces = {fcs_str}, convexity = 10);")
+        lines.append("    }")
+        lines.append("  }")
+    else:
+        lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}])")
+        lines.append(f"    polyhedron(points = {pts_str}, faces = {fcs_str}, convexity = 10);")
+    return "\n".join(lines)
+
+
+def _build_involute_gear_polygon(
+    teeth: int = 20,
+    module: float = 1.5,
+    pressure_angle: float = 20.0,
+) -> list[list[float]]:
+    """生成工业渐开线圆柱正齿轮 2D 轮廓多边形顶点。"""
+    m = float(module)
+    z = max(int(teeth), 4)
+    alpha = math.radians(pressure_angle)
+
+    r_pitch = (m * z) / 2.0
+    r_base = r_pitch * math.cos(alpha)
+    r_outer = r_pitch + 1.0 * m
+    r_root = max(r_pitch - 1.25 * m, 0.5 * m)
+
+    inv_alpha = math.tan(alpha) - alpha
+    tooth_angle = 2.0 * math.pi / z
+    half_tooth = tooth_angle / 4.0
+
+    pts: list[list[float]] = []
+    for tooth in range(z):
+        base_angle = tooth * tooth_angle
+        # 左齿廓渐开线
+        for step in range(5):
+            frac = step / 4.0
+            r = r_root + frac * (r_outer - r_root)
+            if r <= r_base:
+                theta = 0.0
+            else:
+                u = math.sqrt((r / r_base) ** 2 - 1.0)
+                theta = u - math.atan(u)
+            ang = base_angle - (half_tooth + inv_alpha - theta)
+            pts.append([round(r * math.cos(ang), 4), round(r * math.sin(ang), 4)])
+
+        # 右齿廓渐开线
+        for step in reversed(range(5)):
+            frac = step / 4.0
+            r = r_root + frac * (r_outer - r_root)
+            if r <= r_base:
+                theta = 0.0
+            else:
+                u = math.sqrt((r / r_base) ** 2 - 1.0)
+                theta = u - math.atan(u)
+            ang = base_angle + (half_tooth + inv_alpha - theta)
+            pts.append([round(r * math.cos(ang), 4), round(r * math.sin(ang), 4)])
+
+    return pts
+
+
+def _gear_code(size: list[float], center: list[float], holes: list[dict], note: str) -> str:
+    """工业渐开线齿轮生成器（支持中心传动轴孔）。"""
+    teeth = int(size[0]) if size else 20
+    mod = float(size[1]) if len(size) >= 2 else 1.5
+    h = float(size[2]) if len(size) >= 3 else 6.0
+    bore = float(size[3]) if len(size) >= 4 else 5.0
+    pa = float(size[4]) if len(size) >= 5 else 20.0
+    cx, cy, cz = (float(center[i]) for i in range(3))
+
+    pts = _build_involute_gear_polygon(teeth, mod, pa)
+    pts_str = json.dumps(pts)
+
+    lines: list[str] = [
+        f"  // {note}" if note else f"  // involute gear: z={teeth} m={_fmt(mod)} h={_fmt(h)} bore={_fmt(bore)}"
+    ]
+    lines.append(f"  translate([{_fmt(cx)}, {_fmt(cy)}, {_fmt(cz)}]) {{")
+    if bore > 1e-4:
+        lines.append("    difference() {")
+        lines.append(f"      linear_extrude(height = {_fmt(h)}) {{")
+        lines.append(f"        polygon(points = {pts_str});")
+        lines.append("      }")
+        lines.append(f"      translate([0, 0, -1])")
+        lines.append(f"        cylinder(d = {_fmt(bore)}, h = {_fmt(h + 2.0)}, $fn = 32, center = false);")
+        lines.append("    }")
+    else:
+        lines.append(f"    linear_extrude(height = {_fmt(h)}) {{")
+        lines.append(f"      polygon(points = {pts_str});")
+        lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines)
+
+
 PRIMITIVE_BUILDERS = {
     "cube": _cube_code,
     "cuboid": _cube_code,        # LLM 常写 cuboid，等价 cube
@@ -207,6 +392,10 @@ PRIMITIVE_BUILDERS = {
     "sphere": _sphere_code,
     "capsule": _capsule_code,
     "polyhedron": _polyhedron_code,
+    "thread": _thread_code,
+    "metric_thread": _thread_code,
+    "gear": _gear_code,
+    "involute_gear": _gear_code,
 }
 
 

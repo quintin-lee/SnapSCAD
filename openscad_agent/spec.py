@@ -24,12 +24,32 @@ _log = _log_module()
 PRIMITIVES = {
     "cube", "cuboid", "box", "cylinder", "sphere", "capsule", "polyhedron", "hull",
     "linear_extrude", "rotate_extrude", "counterbore", "text",
+    "thread", "metric_thread", "gear", "involute_gear",
 }
 #: 原语别名 → 标准名
 _ALIAS = {
     "cuboid": "cube", "box": "cube",
     "extrude": "linear_extrude",
     "lathe": "rotate_extrude", "revolve": "rotate_extrude",
+    "metric_thread": "thread", "threads": "thread", "screw": "thread", "bolt": "thread", "nut": "thread",
+    "involute_gear": "gear", "spur_gear": "gear", "cog": "gear",
+}
+
+#: ISO / DIN 标准公制螺纹粗牙标准螺距映射 (mm)
+METRIC_PITCH: dict[float, float] = {
+    1.6: 0.35,
+    2.0: 0.4,
+    2.5: 0.45,
+    3.0: 0.5,
+    4.0: 0.7,
+    5.0: 0.8,
+    6.0: 1.0,
+    8.0: 1.25,
+    10.0: 1.5,
+    12.0: 1.75,
+    14.0: 2.0,
+    16.0: 2.0,
+    20.0: 2.5,
 }
 
 #: ISO / DIN 标准公制紧固件阶梯沉头孔尺寸映射: {标称: (通孔直径d_screw, 沉头直径d_head, 沉头深h_head)}
@@ -178,6 +198,34 @@ def normalize_size(prim: str, part: dict[str, Any]) -> list[float]:
         r = _sanitize_num(part.get("radius", 5), 5.0)
         h = _sanitize_num(part.get("height", part.get("length", 20)), 20.0)
         return [r, h]
+    if p in ("thread", "metric_thread"):
+        if isinstance(raw, list) and len(raw) >= 3:
+            d = _sanitize_num(raw[0], 8.0)
+            pitch = _sanitize_num(raw[1], METRIC_PITCH.get(d, 1.25))
+            length = _sanitize_num(raw[2], 15.0)
+            tol = _sanitize_num(raw[3] if len(raw) >= 4 else part.get("tolerance", 0.0), 0.0)
+            internal = 1.0 if (len(raw) >= 5 and raw[4]) or part.get("internal") else 0.0
+            return [d, pitch, length, tol, internal]
+        d = _sanitize_num(part.get("diameter", part.get("d", 8.0)), 8.0)
+        pitch = _sanitize_num(part.get("pitch", part.get("p", METRIC_PITCH.get(d, 1.25))), 1.25)
+        length = _sanitize_num(part.get("length", part.get("height", part.get("h", 15.0))), 15.0)
+        tol = _sanitize_num(part.get("tolerance", -0.1 if not part.get("internal") else 0.2), -0.1 if not part.get("internal") else 0.2)
+        internal = 1.0 if part.get("internal") else 0.0
+        return [d, pitch, length, tol, internal]
+    if p in ("gear", "involute_gear"):
+        if isinstance(raw, list) and len(raw) >= 2:
+            teeth = _sanitize_num(raw[0], 20.0)
+            mod = _sanitize_num(raw[1], 1.5)
+            h = _sanitize_num(raw[2] if len(raw) >= 3 else 6.0, 6.0)
+            bore = _sanitize_num(raw[3] if len(raw) >= 4 else 5.0, 5.0)
+            pa = _sanitize_num(raw[4] if len(raw) >= 5 else 20.0, 20.0)
+            return [teeth, mod, h, bore, pa]
+        teeth = _sanitize_num(part.get("teeth", part.get("z", 20.0)), 20.0)
+        mod = _sanitize_num(part.get("module", part.get("m", 1.5)), 1.5)
+        h = _sanitize_num(part.get("height", part.get("thickness", part.get("h", 6.0))), 6.0)
+        bore = _sanitize_num(part.get("bore", part.get("shaft", 5.0)), 5.0)
+        pa = _sanitize_num(part.get("pressure_angle", 20.0), 20.0)
+        return [teeth, mod, h, bore, pa]
     return [10.0, 10.0, 10.0]
 
 

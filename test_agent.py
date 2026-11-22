@@ -444,6 +444,71 @@ def test_caching_and_parallel_rendering():
     assert out_png.stat().st_mtime == png_mtime_1
 
 
+def test_threads_and_gears():
+    """测试 18: 工业级机械原语与复杂特征库 (公制螺纹与渐开线齿轮)"""
+    from openscad_agent.spec import validate_spec
+    from openscad_agent.geometry import spec_to_scad
+    from openscad_agent.core import AgentConfig, OpenscadRenderer
+
+    spec = {
+        "name": "mech_primitives",
+        "parts": [
+            {
+                "id": "bolt_m8",
+                "primitive": "thread",
+                "diameter": 8.0,
+                "pitch": 1.25,
+                "length": 12.0,
+                "tolerance": -0.1,
+                "internal": False,
+                "center": [-15, 0, 0],
+            },
+            {
+                "id": "nut_m8",
+                "primitive": "thread",
+                "diameter": 8.0,
+                "pitch": 1.25,
+                "length": 8.0,
+                "tolerance": 0.2,
+                "internal": True,
+                "center": [0, 0, 0],
+            },
+            {
+                "id": "pinion_gear",
+                "primitive": "gear",
+                "teeth": 18,
+                "module": 1.25,
+                "height": 6.0,
+                "bore": 4.0,
+                "pressure_angle": 20.0,
+                "center": [25, 0, 0],
+            },
+        ],
+        "assembly": {
+            "union_parts": ["bolt_m8", "nut_m8", "pinion_gear"],
+        },
+    }
+
+    norm, issues = validate_spec(spec)
+    assert len(norm["parts"]) == 3
+    scad_code = spec_to_scad(norm)
+    assert "polyhedron" in scad_code
+    assert "linear_extrude" in scad_code
+    assert "polygon" in scad_code
+
+    scad_path = Path("out_test/test_mech_primitives.scad")
+    scad_path.write_text(scad_code, encoding="utf-8")
+
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+    ok_val, msg_val = renderer.validate(scad_path)
+    assert ok_val, f"OpenSCAD 编译失败: {msg_val}"
+
+    out_stl = Path("out_test/test_mech_primitives.stl")
+    res = renderer.export_model(scad_path, out_stl, force=True)
+    assert res.exists() and res.stat().st_size > 0
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -468,6 +533,7 @@ def run_all_tests() -> bool:
         ("3D 文字浮雕生成编译与审查修剪角色交替", test_text_relief_and_trim),
         ("GUI 嵌入式 3D 交互视口与双模渲染切换", test_gui_embedded_viewport),
         ("增量渲染缓存检测与多视角并发渲染加速", test_caching_and_parallel_rendering),
+        ("工业级机械原语与复杂特征库 (公制螺纹与渐开线齿轮)", test_threads_and_gears),
     ]
 
     all_ok = True

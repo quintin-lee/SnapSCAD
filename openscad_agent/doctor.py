@@ -170,8 +170,17 @@ def _get_part_aabb(p: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
             (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts)),
         )
 
-    elif prim == "cylinder":
-        if len(size) >= 3:
+    elif prim in ("cylinder", "thread", "metric_thread", "gear", "involute_gear"):
+        if prim in ("gear", "involute_gear"):
+            teeth = float(size[0]) if len(size) >= 1 else 20.0
+            mod = float(size[1]) if len(size) >= 2 else 1.5
+            d_tip = mod * (teeth + 2.0)
+            d1 = d2 = d_tip
+            h = float(size[2]) if len(size) >= 3 else 6.0
+        elif prim in ("thread", "metric_thread"):
+            d1 = d2 = float(size[0]) if len(size) >= 1 else 8.0
+            h = float(size[2]) if len(size) >= 3 else 15.0
+        elif len(size) >= 3:
             d1, d2, h = float(size[0]), float(size[1]), float(size[2])
         else:
             d1 = d2 = float(size[0])
