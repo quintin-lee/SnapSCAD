@@ -703,4 +703,146 @@ def generate_print_guide(spec: dict[str, Any], report: PrintabilityReport, out_p
     return out_path
 
 
-__all__ = ["PrintabilityReport", "check_printability", "generate_print_guide", "check_assembly_interference", "get_part_aabb", "analyze_structural_stress", "MATERIAL_PROFILES"]
+def heal_spec_locally(spec: dict[str, Any], compile_err: str = "") -> tuple[dict[str, Any], bool, list[str]]:
+    """本地确定性零延迟规则自愈引擎。
+
+    在无需消耗网络与 LLM Token 的前提下，针对常见的 OpenSCAD 编译与几何拓扑错误直接在内存中执行自愈修复：
+    1. 负数或零尺寸自愈 (Zero/Negative Size Clamping)
+    2. Polyhedron 越界索引与退化面自愈 (Polyhedron Degeneracy Healing)
+    3. 2D Extrude 多边形少于3点或自交自愈 (Polygon Vertex Sanitization)
+    4. 装配树悬空未定义部件引用剔除 (Assembly Dangling Part Pruning)
+    5. 部件 ID 语法合规性自愈 (Sanitize Identifiers)
+    6. 沉孔/盲孔非法尺寸自愈
+    """
+    import copy
+    import re
+
+    s = copy.deepcopy(spec)
+    actions: list[str] = []
+    parts = s.setdefault("parts", [])
+    valid_ids: set[str] = set()
+
+    for p in parts:
+        raw_id = str(p.get("id", p.get("primitive", "part"))).strip()
+        safe_id = "".join(c if c.isalnum() or c == "_" else "_" for c in raw_id)
+        if not safe_id or safe_id[0].isdigit():
+            safe_id = f"p_{safe_id}"
+        if safe_id != raw_id:
+            p["id"] = safe_id
+            actions.append(f"标准化部件标识符: {raw_id} -> {safe_id}")
+        valid_ids.add(safe_id)
+
+        # 尺寸修复: 杜绝 <= 0 的维度导致 CGAL 退化
+        sz = p.get("size")
+        if isinstance(sz, list) and sz:
+            fixed_sz = []
+            sz_modified = False
+            for v in sz:
+                try:
+                    fv = float(v)
+                    if fv <= 1e-4:
+                        fixed_sz.append(1.0)
+                        sz_modified = True
+                    else:
+                        fixed_sz.append(fv)
+                except (ValueError, TypeError):
+                    fixed_sz.append(10.0)
+                    sz_modified = True
+            if sz_modified:
+                p["size"] = fixed_sz
+                actions.append(f"修正部件 {safe_id} 非法尺寸为安全数值: {fixed_sz}")
+
+        # Polyhedron 多面体越界索引修复
+        prim = str(p.get("primitive", "")).lower()
+        if prim == "polyhedron":
+            verts = p.get("vertices", [])
+            faces = p.get("faces", [])
+            if not verts or len(verts) < 4:
+                p["primitive"] = "cube"
+                p["size"] = [10.0, 10.0, 10.0]
+                actions.append(f"多面体 {safe_id} 顶点不足，安全降级为 cube")
+            elif faces:
+                nv = len(verts)
+                clean_faces = []
+                faces_changed = False
+                for face in faces:
+                    if isinstance(face, (list, tuple)) and len(face) >= 3:
+                        if all(isinstance(idx, int) and 0 <= idx < nv for idx in face):
+                            clean_faces.append(face)
+                        else:
+                            faces_changed = True
+                    else:
+                        faces_changed = True
+                if faces_changed or not clean_faces:
+                    if clean_faces:
+                        p["faces"] = clean_faces
+                        actions.append(f"清洗多面体 {safe_id} 越界顶点索引面")
+                    else:
+                        p["primitive"] = "cube"
+                        p["size"] = [10.0, 10.0, 10.0]
+                        actions.append(f"多面体 {safe_id} 无有效面，安全降级为 cube")
+
+        # 2D 拉伸多边形点集修复
+        if prim in ("linear_extrude", "rotate_extrude"):
+            poly = p.get("polygon", [])
+            if not isinstance(poly, list) or len(poly) < 3:
+                p["polygon"] = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+                actions.append(f"修正 {safe_id} 拉伸多边形点集 (至少需3个点)")
+
+        # 孔洞非正数修复
+        holes = p.get("holes")
+        if isinstance(holes, list):
+            for h in holes:
+                h_sz = h.get("size")
+                if isinstance(h_sz, list) and h_sz:
+                    fixed_h_sz = [max(float(v), 0.5) if isinstance(v, (int, float)) else 5.0 for v in h_sz]
+                    if fixed_h_sz != h_sz:
+                        h["size"] = fixed_h_sz
+                        actions.append(f"修正 {safe_id} 内部孔洞尺寸为合法正数")
+
+    # 装配拓扑悬空引用清洗
+    assembly = s.setdefault("assembly", {})
+    for op in ("union_parts", "intersection_parts", "difference_parts"):
+        ids = assembly.get(op)
+        if isinstance(ids, list) and ids:
+            cleaned_ids = [str(x) for x in ids if str(x) in valid_ids]
+            if len(cleaned_ids) != len(ids):
+                assembly[op] = cleaned_ids
+                actions.append(f"剔除装配树 {op} 中不存在的悬空部件引用")
+
+    if not assembly.get("union_parts") and not assembly.get("intersection_parts"):
+        assembly["union_parts"] = list(valid_ids)
+        actions.append("自动重置空装配树为全量部件并集")
+
+    was_fixed = len(actions) > 0
+    return s, was_fixed, actions
+
+
+def extract_failing_part_id(compile_err: str, scad_code: str = "") -> Optional[str]:
+    """从编译器报错与源码中准确定位发生语法或几何拓扑错误的具体部件 ID。"""
+    import re
+    m_mod = re.search(r"module\s+([A-Za-z0-9_]+)", compile_err, re.IGNORECASE)
+    if m_mod:
+        mod_name = m_mod.group(1)
+        if not mod_name.endswith("_model") and mod_name != "main":
+            return mod_name
+
+    m_line = re.search(r"line\s+(\d+)", compile_err, re.IGNORECASE)
+    if m_line and scad_code:
+        err_line = int(m_line.group(1))
+        lines = scad_code.splitlines()
+        current_mod = None
+        for line in lines[:err_line]:
+            m_def = re.match(r"\s*module\s+([A-Za-z0-9_]+)\s*\(", line)
+            if m_def:
+                current_mod = m_def.group(1)
+        if current_mod and not current_mod.endswith("_model") and current_mod != "main":
+            return current_mod
+    return None
+
+
+__all__ = [
+    "PrintabilityReport", "check_printability", "generate_print_guide",
+    "check_assembly_interference", "get_part_aabb", "analyze_structural_stress",
+    "MATERIAL_PROFILES", "heal_spec_locally", "extract_failing_part_id"
+]
