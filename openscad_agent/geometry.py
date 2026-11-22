@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import AgentConfig
-from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole, validate_spec
+from .spec import normalize_size as _spec_norm_size, normalize_hole_size as _spec_norm_hole, validate_spec, resolve_geometric_constraints
 from .doctor import check_printability, _get_part_aabb
 from .log import get_logger as _log_module
 
@@ -907,6 +907,7 @@ def spec_to_scad(
     fn: 圆柱/球体分段精度 ($fn)；0 表示不注入（使用 OpenSCAD 默认）。
     非 0 时在文件头注入 $fn=..., 控制曲面体平滑度。
     """
+    spec, _ = resolve_geometric_constraints(spec)
     model_name = spec.get("name", "model")
     safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in model_name)
     description = spec.get("description", "")
