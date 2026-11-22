@@ -204,23 +204,45 @@ class OpenscadAgent:
         scad_path = Path(scad_path_str)
         ok, msg = self.renderer.validate(scad_path)
         if not ok:
-            # 4. 带错误信息重试（最多 3 轮）
-            for i in range(self.max_fix_rounds):
-                rounds += 1
-                _log.warning("[agent] 编译失败 (round %d/%d)，阶梯温控请求 LLM 修正…", i + 1, self.max_fix_rounds)
-                fixed_spec = self._ask_fix(spec, msg, hint, image_name, round_index=i + 1)
-                if fixed_spec is None:
-                    errors.append(f"修正请求失败 (round {i + 1}): LLM 限流或不可用")
-                    break
-                if fixed_spec is spec:
-                    errors.append(f"LLM 无法修正 (round {i + 1})，保留当前 spec")
-                    break
-                spec = fixed_spec
-                spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
-                scad_path = Path(scad_path_str)
-                ok, msg = self.renderer.validate(scad_path)
-                if ok:
-                    break
+            # 4.1 本地规则先行自愈 (Zero-Latency Rule-based Healing)
+            from .doctor import heal_spec_locally, extract_failing_part_id
+            healed_spec, fixed_locally, local_actions = heal_spec_locally(spec, msg)
+            if fixed_locally:
+                _log.info("[agent] 本地规则自愈已触发 (%s)，正在重新验证编译…", ", ".join(local_actions))
+                test_sp, test_sc, test_safe = write_spec_and_scad(healed_spec, self.config, tag=tag)
+                ok_local, msg_local = self.renderer.validate(Path(test_sc))
+                if ok_local:
+                    spec = healed_spec
+                    spec_path_str, scad_path_str, safe = test_sp, test_sc, test_safe
+                    scad_path = Path(scad_path_str)
+                    ok = True
+                    msg = msg_local
+                    _log.info("[agent] 本地规则成功自愈，0ms 绕过大模型网络请求！")
+
+            if not ok:
+                # 4.2 带错误信息重试（最多 3 轮，优先尝试局部差量 patch_spec 修剪）
+                for i in range(self.max_fix_rounds):
+                    rounds += 1
+                    failing_id = extract_failing_part_id(msg, scad_path.read_text(encoding="utf-8", errors="ignore"))
+                    fixed_spec = None
+                    if failing_id and any(p.get("id") == failing_id for p in spec.get("parts", [])):
+                        _log.info("[agent] 定位到出错部件 '%s'，尝试基于 patch_spec 局部差量修复…", failing_id)
+                        fixed_spec = self._ask_patch_fix(spec, failing_id, msg, hint, image_name, round_index=i + 1)
+                    if not fixed_spec or fixed_spec is spec:
+                        _log.warning("[agent] 编译失败 (round %d/%d)，阶梯温控请求 LLM 全量修正…", i + 1, self.max_fix_rounds)
+                        fixed_spec = self._ask_fix(spec, msg, hint, image_name, round_index=i + 1)
+                    if fixed_spec is None:
+                        errors.append(f"修正请求失败 (round {i + 1}): LLM 限流或不可用")
+                        break
+                    if fixed_spec is spec:
+                        errors.append(f"LLM 无法修正 (round {i + 1})，保留当前 spec")
+                        break
+                    spec = fixed_spec
+                    spec_path_str, scad_path_str, safe = write_spec_and_scad(spec, self.config, tag=tag)
+                    scad_path = Path(scad_path_str)
+                    ok, msg = self.renderer.validate(scad_path)
+                    if ok:
+                        break
             if not ok:
                 # 循环退出时 ok/msg 已是最后一次 validate 的结果，无需重复编译
                 errors.append(f"OpenSCAD 编译校验始终失败:\n{msg}")
@@ -536,6 +558,37 @@ class OpenscadAgent:
         return merged
 
     # ------------------------------------------------------------------
+    def _ask_patch_fix(
+        self, spec: dict[str, Any], part_id: str, compile_err: str, hint: str, image_name: str, round_index: int = 1
+    ) -> Optional[dict[str, Any]]:
+        """向 LLM 请求局部差量 Patch 修复单个出错部件，避免全量重推引起全局漂移。"""
+        from .geometry import patch_spec
+        from dataclasses import replace
+        target_part = next((p for p in spec.get("parts", []) if p.get("id") == part_id), None)
+        if not target_part:
+            return None
+        sys_msg = (
+            "你是 OpenSCAD 专家。部件生成的源码编译报错，请仅针对该出错部件提供局部修补 JSON 补丁。\n"
+            f"出错部件:\n{json.dumps(target_part, ensure_ascii=False, indent=2)}\n\n"
+            f"编译报错:\n{compile_err}\n\n"
+            "只输出合法的补丁 JSON 对象，格式如:\n"
+            '{"modify_parts": [{"id": "' + part_id + '", "primitive": "cube", "size": [10, 20, 5]}]}'
+        )
+        user_msg = f"请输出修复部件 {part_id} 的局部补丁 JSON。"
+        try:
+            step_temp = min(self.config.temperature + (round_index - 1) * 0.2, 0.7)
+            fix_config = replace(self.config, temperature=step_temp)
+            vision = AgnesVision(fix_config)
+            patch_data = vision._chat([
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user_msg},
+            ])
+            if isinstance(patch_data, dict):
+                return patch_spec(spec, patch_data)
+        except Exception as e:
+            _log.warning("[agent] 局部差量修复异常: %s", e)
+        return None
+
     def _ask_fix(
         self, spec: dict[str, Any], compile_err: str, hint: str, image_name: str, round_index: int = 1
     ) -> Optional[dict[str, Any]]:
