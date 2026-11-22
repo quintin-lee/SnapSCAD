@@ -18,6 +18,7 @@ from .server import serve_assets, stop_server, is_port_in_use, create_app
 from .workspace import generate_workspace_html
 from .slicer import probe_slicers, slice_model, SlicingConfig, SlicingResult, parse_gcode_metadata
 from .dispatcher import PrinterDispatcher, DispatchConfig, DispatchResult
+from .blueprint import generate_technical_blueprint
 
 __all__ = [
     "AgentConfig",
@@ -42,6 +43,7 @@ __all__ = [
     "MATERIAL_PROFILES",
     "generate_gallery",
     "generate_workspace_html",
+    "generate_technical_blueprint",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

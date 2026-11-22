@@ -754,6 +754,10 @@ class MainWindow(QMainWindow):
         self.btn_export_step.clicked.connect(self.on_export_step)
         act_bar.addWidget(self.btn_export_step)
 
+        self.btn_export_blueprint = QPushButton("📐 导出工程图纸")
+        self.btn_export_blueprint.clicked.connect(self.on_export_blueprint)
+        act_bar.addWidget(self.btn_export_blueprint)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1508,6 +1512,43 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "导出失败", f"导出 STEP 异常: {e}")
+
+    def on_export_blueprint(self) -> None:
+        """从当前模型规范生成带工业级尺寸标注的纯矢量三视图与轴测工程图纸 (SVG/PNG)。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        from openscad_agent.blueprint import generate_technical_blueprint
+        try:
+            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            out_svg = scad_p.with_name(f"{scad_p.stem}_blueprint.svg")
+            out_png = scad_p.with_name(f"{scad_p.stem}_blueprint.png")
+            generate_technical_blueprint(
+                spec,
+                out_svg=out_svg,
+                out_png=out_png,
+                preview_png=scad_p.with_suffix(".png"),
+            )
+            self.log(f"📐 工业级尺寸标注工程图纸已生成: {out_svg.name}")
+            self._refresh_file_list(scad_p.parent)
+            reply = QMessageBox.question(
+                self, "工程图纸生成成功",
+                f"已生成工业级标准尺寸标注图纸:\n• 纯矢量图纸: {out_svg.name}\n"
+                f"• 光栅高清图: {out_png.name if out_png.exists() else '未渲染'}\n\n"
+                f"是否立即在浏览器或默认看图软件中打开查看？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_svg)))
+        except Exception as e:
+            QMessageBox.warning(self, "图纸生成失败", f"生成工程图纸异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

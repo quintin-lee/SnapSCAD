@@ -138,6 +138,7 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                         "has_stl": (out_dir / f"{stem}.stl").exists(),
                         "has_3mf": (out_dir / f"{stem}.3mf").exists(),
                         "has_gcode": (out_dir / f"{stem}.gcode").exists(),
+                        "has_blueprint": (out_dir / f"{stem}_blueprint.svg").exists(),
                         "has_viewer": (out_dir / f"{stem}_viewer.html").exists(),
                     })
                 except Exception:
@@ -145,7 +146,7 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
             self.send_json(models)
             return
 
-        # 3. 获取单模型详情 或 G-code 原始内容
+        # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
             if rest.endswith("/gcode"):
@@ -162,6 +163,33 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                     return
                 else:
                     self.send_json({"error": f"模型 '{stem}' 尚未切片生成 G-code"}, status=404)
+                    return
+
+            if rest.endswith("/blueprint"):
+                stem = rest.replace("/blueprint", "").strip()
+                cand_svg = out_dir / f"{stem}_blueprint.svg"
+                if not cand_svg.exists():
+                    cand_spec = out_dir / f"{stem}_spec.json"
+                    if cand_spec.exists():
+                        try:
+                            from .blueprint import generate_technical_blueprint
+                            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                            preview_png = out_dir / f"{stem}.png"
+                            generate_technical_blueprint(spec, cand_svg, preview_png=preview_png)
+                        except Exception as e:
+                            self.send_json({"error": f"生成工程图纸失败: {e}"}, status=500)
+                            return
+                if cand_svg.exists():
+                    data = cand_svg.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                else:
+                    self.send_json({"error": f"模型 '{stem}' 未找到工程图纸"}, status=404)
                     return
 
             stem = rest
@@ -400,6 +428,37 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 7. 工业级带标注正交工程图纸导出 (Export Blueprint)
+        if clean_path == "/api/export_blueprint":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少模型 stem 名称"}, status=400)
+                return
+
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                self.send_json({"error": f"未找到模型规格: {stem}_spec.json"}, status=404)
+                return
+
+            from .blueprint import generate_technical_blueprint
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                out_svg = out_dir / f"{stem}_blueprint.svg"
+                out_png = out_dir / f"{stem}_blueprint.png"
+                preview_png = out_dir / f"{stem}.png"
+                material = body.get("material", "PLA")
+                generate_technical_blueprint(spec, out_svg, out_png=out_png, preview_png=preview_png, material=material)
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "svg": out_svg.name,
+                    "png": out_png.name if out_png.exists() else "",
+                    "message": "工业级标准工程尺寸标注图纸已生成",
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -523,6 +582,38 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     spec = json.loads(cand_spec.read_text(encoding="utf-8"))
                     export_freecad_script(spec, out_script=fc_file)
                 return {"success": True, "stem": stem, "step": step_file.name, "freecad": fc_file.name}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/model/{stem}/blueprint")
+        def get_model_blueprint(stem: str) -> Any:
+            from fastapi.responses import Response
+            cand_svg = out_dir / f"{stem}_blueprint.svg"
+            if not cand_svg.exists():
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    from .blueprint import generate_technical_blueprint
+                    spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    generate_technical_blueprint(spec, cand_svg, preview_png=out_dir / f"{stem}.png")
+            if cand_svg.exists():
+                return Response(content=cand_svg.read_bytes(), media_type="image/svg+xml")
+            raise HTTPException(status_code=404, detail=f"未找到工程图纸: {stem}")
+
+        @app.post("/api/export_blueprint")
+        def export_blueprint_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格文件: {stem}_spec.json")
+            from .blueprint import generate_technical_blueprint
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                out_svg = out_dir / f"{stem}_blueprint.svg"
+                out_png = out_dir / f"{stem}_blueprint.png"
+                generate_technical_blueprint(spec, out_svg, out_png=out_png, preview_png=out_dir / f"{stem}.png")
+                return {"success": True, "stem": stem, "svg": out_svg.name, "png": out_png.name if out_png.exists() else ""}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

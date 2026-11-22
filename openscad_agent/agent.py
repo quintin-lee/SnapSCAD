@@ -79,6 +79,8 @@ class AgentResult:
     gcode_path: Optional[str] = None
     #: 自动化切片物理指标与元数据 (SlicingResult)
     slicing_result: Optional[Any] = None
+    #: 自动生成的工业级尺寸标注矢量工程图纸路径 (*_blueprint.svg)
+    blueprint_path: Optional[str] = None
     #: 最后一次审查结论（含 match/score/issues/verdict）
     review: Optional[dict[str, Any]] = None
 
@@ -349,12 +351,31 @@ class OpenscadAgent:
             except Exception as e:  # noqa: BLE001
                 _log.warning("[agent] 自动化切片失败: %s", e)
 
+        # 6. 自动生成工业级标准尺寸标注工程图纸 (*_blueprint.svg)
+        blueprint_file: Optional[str] = None
+        try:
+            from .blueprint import generate_technical_blueprint
+            bp_svg = out_dir / f"{safe}_blueprint.svg"
+            bp_png = out_dir / f"{safe}_blueprint.png"
+            generate_technical_blueprint(
+                spec,
+                out_svg=bp_svg,
+                out_png=bp_png,
+                preview_png=Path(preview_png) if preview_png else None,
+                material=getattr(self.config, "material", "PLA"),
+            )
+            blueprint_file = str(bp_svg)
+            _log.info("[agent] 已生成工业级尺寸工程图纸: %s", bp_svg.name)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("[agent] 工程图纸自动生成失败: %s", e)
+
         _log.info("[agent] 完成: %s (fix_rounds=%d, review_rounds=%d, errors=%d)", safe, rounds, review_rounds, len(errors))
         return AgentResult(
             success=True, spec=spec, spec_path=spec_path_str,
             scad_path=str(scad_path), model_file=model_file,
             preview_png=preview_png, viewer_html=viewer_html,
             print_guide=print_guide_file,
+            blueprint_path=blueprint_file,
             gcode_path=gcode_file, slicing_result=slicing_res,
             errors=errors, fix_rounds=rounds,
             review_rounds=review_rounds, review=self.last_review,

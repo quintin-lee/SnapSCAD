@@ -1472,6 +1472,93 @@ def test_engineering_priors_and_image_roi_crop():
             assert cropped.stat().st_size > 0
 
 
+def test_dimensioned_technical_blueprint_and_api():
+    """测试 37: 工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint) 及微服务端点"""
+    from openscad_agent.blueprint import generate_technical_blueprint
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = Path(td)
+        spec = {
+            "name": "mounting_flange",
+            "description": "法兰安装底座",
+            "parts": [
+                {
+                    "id": "base_plate",
+                    "primitive": "cube",
+                    "size": [60.0, 40.0, 12.0],
+                    "center": [0.0, 0.0, 0.0],
+                    "holes": [
+                        {"primitive": "cylinder", "size": [6.0, 20.0], "center": [10.0, 10.0, 0.0]},
+                        {"primitive": "cylinder", "size": [6.0, 20.0], "center": [50.0, 30.0, 0.0]},
+                    ]
+                }
+            ]
+        }
+        svg_file = out_dir / "flange_blueprint.svg"
+
+        # 1. 验证纯矢量工程图纸生成与规范合规
+        res_svg = generate_technical_blueprint(spec, out_svg=svg_file, material="PETG")
+        assert res_svg.exists()
+        assert res_svg.stat().st_size > 0
+
+        svg_txt = res_svg.read_text(encoding="utf-8")
+        # 验证 SVG 根节点与标准工程幅面
+        assert '<svg xmlns="http://www.w3.org/2000/svg"' in svg_txt
+        assert 'viewBox="0 0 1200 800"' in svg_txt
+        # 验证图框与内边框
+        assert 'class="border-outer"' in svg_txt
+        assert 'class="border-inner"' in svg_txt
+        # 验证标准正交三视图与轴测图
+        assert '俯视图 TOP VIEW (X-Y)' in svg_txt
+        assert '主视图 FRONT VIEW (X-Z)' in svg_txt
+        assert '侧视图 SIDE VIEW (Y-Z)' in svg_txt
+        assert '轴测图 ISOMETRIC 3D' in svg_txt
+        # 验证双向尺寸箭头与引出线定义
+        assert '<marker id="arrow"' in svg_txt
+        assert '<marker id="arrow_rev"' in svg_txt
+        assert 'class="dim-line"' in svg_txt
+        assert 'class="dim-text"' in svg_txt
+        # 验证尺寸标注数值正确提取
+        assert 'W 60' in svg_txt
+        assert 'D 40' in svg_txt
+        assert 'H 12' in svg_txt
+        # 验证通孔直径引线标注与第三角投影法图符
+        assert '⌀6 THRU' in svg_txt
+        assert 'PETG (FDM)' in svg_txt
+        assert 'MOUNTING_FLANGE' in svg_txt
+        assert 'METRIC (mm)' in svg_txt
+
+        # 2. 准备 spec 文件并验证微服务 GET /api/model/{stem}/blueprint 与 POST /api/export_blueprint
+        spec_file = out_dir / "flange_spec.json"
+        spec_file.write_text(json.dumps(spec), encoding="utf-8")
+
+        _, _, port = serve_assets(out_dir, port=8994, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 测试 GET 图纸端点
+            r_get = requests.get(f"{base}/api/model/flange/blueprint", timeout=10)
+            assert r_get.status_code == 200
+            assert "image/svg+xml" in r_get.headers.get("Content-Type", "")
+            assert "<svg" in r_get.text
+            assert "MOUNTING_FLANGE" in r_get.text
+
+            # 测试 POST 导出图纸端点
+            r_post = requests.post(f"{base}/api/export_blueprint", json={
+                "stem": "flange",
+                "material": "ABS",
+            }, timeout=10)
+            assert r_post.status_code == 200
+            p_data = r_post.json()
+            assert p_data["success"] is True
+            assert p_data["svg"] == "flange_blueprint.svg"
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -1515,6 +1602,7 @@ def run_all_tests() -> bool:
         ("确定性语义锚点与相对几何约束求解器 (resolve_geometric_constraints)", test_geometric_constraint_solver_and_semantic_anchors),
         ("服务端结构化语法约束解码与容错 JSON 解析 (robust_json_loads)", test_structured_output_and_robust_json_parsing),
         ("工业常识先验规范库与目标 ROI 自动裁剪 (apply_engineering_priors)", test_engineering_priors_and_image_roi_crop),
+        ("工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint)", test_dimensioned_technical_blueprint_and_api),
     ]
 
     all_ok = True

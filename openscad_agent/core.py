@@ -632,6 +632,24 @@ class OpenscadRenderer:
             except OSError:
                 pass
 
+    def export_technical_blueprint(
+        self,
+        spec: dict[str, Any],
+        out_svg: Path,
+        out_png: Optional[Path] = None,
+        preview_png: Optional[Path] = None,
+        material: str = "PLA",
+    ) -> Path:
+        """从模型规范生成带工业标准尺寸标注的纯矢量正交三视图与轴测工程图纸。"""
+        from .blueprint import generate_technical_blueprint
+        return generate_technical_blueprint(
+            spec,
+            out_svg=out_svg,
+            out_png=out_png,
+            preview_png=preview_png,
+            material=material,
+        )
+
 
 def _extract_root_module(scad_path: Path) -> str:
     """从 .scad 文件末尾提取顶层入口模块名。"""
