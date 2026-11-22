@@ -34,6 +34,7 @@
 ```
 
 设计要点：
+- **确定性语义锚点与相对几何约束求解器 (`resolve_geometric_constraints`)**：引入声明式装配相对依附语义（`attach_to` / `relative_to` / `face` / `align` / `offset`）与孔系阵列语义（`align: center` / `pattern: 4_corners` / `corner_inset`），由 Python 端包围盒求解器直接闭式推导为绝对空间坐标，彻底摆脱大模型三维浮点空间矩阵心算负担，保证孔位与装配面 100% 精确对齐。
 - **本地零延迟自愈规则库与局部差量修补 (`heal_spec_locally` & `patch_spec`)**：当 OpenSCAD 编译校验失败时，系统优先触发内存级确定性规则引擎，自动修正负/零尺寸、清洗 polyhedron 越界索引面、补全退化多边形并剔除装配悬空引用（0ms 瞬间自愈且零 Token 损耗）；若需大模型介入，通过编译器日志与行号精准定位故障部件（`extract_failing_part_id`），仅对出错部件发起局部差量 Patch 修补，杜绝全局重写的幻觉与次生破坏。
 - **几何转译防共面微延展保护 (Automatic Epsilon Offset)**：在进行孔洞布尔挖除与差集切削时，底层几何转译器自动引入 $\varepsilon = 0.05\,\text{mm}$ 微延展扩展，彻底杜绝 OpenSCAD CGAL 经典的共面重叠（Z-fighting）假象以及 0 厚度非流形破面缺陷。
 - **全参数提升与 OpenSCAD Customizer 交互滑块绑定 (Parameter Hoisting)**：自动将零件核心特征尺寸（长宽高、直径、孔径）提升为顶部全局变量，并自动注入规范的 Customizer 滑块注释范围（`// [min:step:max]`），使生成的 `.scad` 代码具备极佳的可视化交互微调能力。
