@@ -578,6 +578,50 @@ def test_pulleys_snaps_magnets():
     assert res.exists() and res.stat().st_size > 0
 
 
+def test_metric_calibration_and_multiview():
+    """测试 20: 物理基准参照物标尺校准与多视角空间推导"""
+    from openscad_agent.spec import validate_spec, METRIC_CALIBRATION_REFS
+    from openscad_agent.vision import build_vision_prompt
+
+    # 1. 验证基准物数据库覆盖常见硬币、银行卡、A4纸
+    assert "coin_1cny" in METRIC_CALIBRATION_REFS
+    assert "credit_card" in METRIC_CALIBRATION_REFS
+    assert METRIC_CALIBRATION_REFS["coin_1cny"]["d_mm"] == 25.0
+    assert METRIC_CALIBRATION_REFS["credit_card"]["width_mm"] == 85.60
+
+    # 2. 验证基于 1元硬币 (25mm) 的真实尺寸自动校准
+    # 假设图像初步估算硬币基准为 50mm -> 缩放系数应为 25.0 / 50.0 = 0.5
+    raw_spec = {
+        "name": "calibrated_mount",
+        "calibration": {
+            "reference": "coin_1cny",
+            "estimated_mm": 50.0,
+        },
+        "parts": [
+            {
+                "id": "mount_base",
+                "primitive": "cube",
+                "size": [100.0, 60.0, 20.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [
+                    {"primitive": "cylinder", "size": [10.0, 20.0], "center": [0.0, 0.0, 0.0]}
+                ],
+            }
+        ],
+    }
+    norm, issues = validate_spec(raw_spec)
+    assert any("校准系数" in s for s in issues)
+    # 尺寸缩小 50%
+    assert norm["parts"][0]["size"] == [50.0, 30.0, 10.0]
+    assert norm["parts"][0]["holes"][0]["size"] == [5.0, 10.0]
+
+    # 3. 验证提示词注入多视角空间推导与草图标注支持
+    prompt = build_vision_prompt("机械支架草图 Φ20 R5 1元硬币参照")
+    assert "多视角空间对齐" in prompt
+    assert "coin_1cny" in prompt
+    assert "Φ" in prompt
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -604,6 +648,7 @@ def run_all_tests() -> bool:
         ("增量渲染缓存检测与多视角并发渲染加速", test_caching_and_parallel_rendering),
         ("工业级机械原语与复杂特征库 (公制螺纹与渐开线齿轮)", test_threads_and_gears),
         ("GT2 同步轮与免胶装配结构 (悬臂梁卡扣与强磁沉孔)", test_pulleys_snaps_magnets),
+        ("物理基准参照物标尺校准与多视角空间推导", test_metric_calibration_and_multiview),
     ]
 
     all_ok = True

@@ -181,13 +181,17 @@ def build_vision_prompt(context_text: str = "") -> str:
 {SPEC_SCHEMA}
 
 2. 几何判断原则：
-   - 优先用最简单的 CSG 原语与高级特征表达：方块/圆柱/圆锥/球/胶囊/多面体/2D拉伸/2D回转 + 阵列(array)/镜像(symmetric)/union/difference。
+   - 优先用最简单的 CSG 原语与高级特征表达：方块/圆柱/圆锥/球/胶囊/多面体/2D拉伸/2D回转/公制螺纹(thread)/齿轮(gear)/GT2同步轮(timing_pulley)/卡扣(snap_joint)/强磁孔(magnet_pocket) + 阵列(array)/镜像(symmetric)/union/difference。
    - 尺寸以毫米(mm)为单位，给出合理工程估计（例如手机壳约 150x75x8mm）。
    - 孔、凹槽、切角等"减去"的特征放入对应 part 的 holes。
    - 装配关系写入 assembly 字段。
-3. 对于无法用简单原语精确表达的曲面特征，用 polyhedron/linear_extrude 近似，并在 part.note 中说明近似方式。
-4. 若图片模糊或无法判断，请给出最合理的假设并全部记录在 description 与 print_tips 中。
-5. 参考逆向分解范例（针对当前领域 [{domain}]，示范接地对齐、阵列与语义着色）：
+3. 多视角空间对齐与草图标注识别 (Multi-View & Drawing Support)：
+   - 若提供多张不同视角参考图（正视/俯视/侧视/背视），请综合交叉推导三维结构，背面或内部暗腔特征予以保留；
+   - 支持手绘工程草图与白板制图标注：识别双箭头尺寸线、数值单位、直径符号 Φ（如 Φ20 对应圆柱直角/孔直径 20mm）、圆角符号 R（如 R3 对应 fillet=3.0）、倒角 C（如 C2 对应 chamfer=2.0）以及紧固件代号（如 M3/M4/M5 对应 counterbore 或 thread）；
+   - 若画面中含有基准参照物（如 1元硬币 coin_1cny 直径25mm、银行卡/身份证 credit_card 85.6x54mm、A4纸 a4_paper 210x297mm、格尺），可在顶层输出 "calibration": {{"reference": "coin_1cny", "estimated_mm": 25.0}} 驱动物理毫米自动精确校准。
+4. 对于无法用简单原语精确表达的曲面特征，用 polyhedron/linear_extrude 近似，并在 part.note 中说明近似方式。
+5. 若图片模糊或无法判断，请给出最合理的假设并全部记录在 description 与 print_tips 中。
+6. 参考逆向分解范例（针对当前领域 [{domain}]，示范接地对齐、阵列与语义着色）：
 {example}
 """
 

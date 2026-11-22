@@ -67,6 +67,18 @@ METRIC_FASTENERS: dict[str, tuple[float, float, float]] = {
     "M8": (9.0, 15.0, 8.2),
 }
 
+#: 常见实物基准参照物数据库 (供视觉比例标定自动推算 mm 缩放比率)
+METRIC_CALIBRATION_REFS: dict[str, dict[str, Any]] = {
+    "coin_1cny": {"name": "1元硬币 (人民币)", "shape": "circle", "d_mm": 25.0},
+    "coin_5jiao": {"name": "5角硬币 (人民币)", "shape": "circle", "d_mm": 20.5},
+    "coin_1jiao": {"name": "1角硬币 (人民币)", "shape": "circle", "d_mm": 19.0},
+    "coin_us_quarter": {"name": "US Quarter 25美分", "shape": "circle", "d_mm": 24.26},
+    "coin_us_penny": {"name": "US Penny 1美分", "shape": "circle", "d_mm": 19.05},
+    "credit_card": {"name": "标准银行卡/身份证 (ID-1)", "shape": "rect", "width_mm": 85.60, "height_mm": 53.98},
+    "a4_paper": {"name": "A4 打印纸", "shape": "rect", "width_mm": 210.0, "height_mm": 297.0},
+    "ruler_10mm": {"name": "格尺/标尺 10mm", "shape": "linear", "length_mm": 10.0},
+}
+
 
 def _as_vec3(v: Any, default=(0.0, 0.0, 0.0)) -> list[float]:
     """把任意值规范为 3 分量 float 向量。"""
@@ -491,6 +503,54 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
                     h["linear_array"]["step"] = _scale_geom(h["linear_array"]["step"], factor)
                 if h.get("radial_array"):
                     h["radial_array"]["radius"] = _scale_geom(h["radial_array"]["radius"], factor)
+
+    # 视觉基准参照物标定 (Metric Visual Calibration)
+    calib = out.get("calibration")
+    if isinstance(calib, dict):
+        calib_factor = float(_sanitize_num(calib.get("scale_factor", 1.0), 1.0))
+        ref_id = str(calib.get("reference", calib.get("object", ""))).lower().strip()
+        ref_info = METRIC_CALIBRATION_REFS.get(ref_id)
+        if ref_info:
+            target_mm = ref_info.get("d_mm") or ref_info.get("width_mm") or ref_info.get("length_mm")
+            estimated_mm = float(_sanitize_num(calib.get("estimated_mm", calib.get("measured_mm", 0.0)), 0.0))
+            if estimated_mm > 1e-4 and target_mm:
+                calib_factor = float(target_mm) / estimated_mm
+                calib["scale_factor"] = round(calib_factor, 4)
+        if abs(calib_factor - 1.0) > 1e-4:
+            issues.append(f"视觉基准参照物标定自动缩放 (校准系数 ×{calib_factor:.4f})")
+            for p in out["parts"]:
+                p["size"] = _scale_geom(p.get("size"), calib_factor)
+                p["center"] = _scale_geom(p.get("center"), calib_factor)
+                if "height" in p:
+                    p["height"] = _scale_geom(p["height"], calib_factor)
+                if "radius" in p:
+                    p["radius"] = _scale_geom(p["radius"], calib_factor)
+                if "fillet" in p:
+                    p["fillet"] = _scale_geom(p["fillet"], calib_factor)
+                if "chamfer" in p:
+                    p["chamfer"] = _scale_geom(p["chamfer"], calib_factor)
+                if "r1" in p:
+                    p["r1"] = _scale_geom(p["r1"], calib_factor)
+                if "r2" in p:
+                    p["r2"] = _scale_geom(p["r2"], calib_factor)
+                if p.get("polygon"):
+                    p["polygon"] = _scale_geom(p["polygon"], calib_factor)
+                if p.get("points"):
+                    p["points"] = _scale_geom(p["points"], calib_factor)
+                if p.get("linear_array"):
+                    p["linear_array"]["step"] = _scale_geom(p["linear_array"]["step"], calib_factor)
+                if p.get("radial_array"):
+                    p["radial_array"]["radius"] = _scale_geom(p["radial_array"]["radius"], calib_factor)
+                if str(p.get("primitive", "")).lower() == "text" or p.get("text") or p.get("font_size"):
+                    if "font_size" in p:
+                        p["font_size"] = _scale_geom(p["font_size"], calib_factor)
+                for h in p.get("holes", []):
+                    h["size"] = _scale_geom(h.get("size"), calib_factor)
+                    h["center"] = _scale_geom(h.get("center"), calib_factor)
+                    if h.get("linear_array"):
+                        h["linear_array"]["step"] = _scale_geom(h["linear_array"]["step"], calib_factor)
+                    if h.get("radial_array"):
+                        h["radial_array"]["radius"] = _scale_geom(h["radial_array"]["radius"], calib_factor)
 
     # 规范化 id：去重
     seen: set[str] = set()
