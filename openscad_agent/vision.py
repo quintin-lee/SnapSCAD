@@ -202,6 +202,66 @@ class SpecParseError(RuntimeError):
     pass
 
 
+def robust_json_loads(raw: str) -> Any:
+    """容错型 JSON 解析器，自动修复 Markdown 代码块、尾逗号、截断未闭合括号栈与控制字符。"""
+    s = raw.strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s, re.IGNORECASE)
+    if m:
+        s = m.group(1).strip()
+    else:
+        first_brace = s.find("{")
+        if first_brace != -1:
+            s = s[first_brace:]
+
+    # 清除尾逗号
+    s_clean = re.sub(r",\s*([\]}])", r"\1", s)
+    try:
+        return json.loads(s_clean)
+    except json.JSONDecodeError:
+        pass
+
+    # 栈式括号追踪，按严格反序精准补全截断未闭合括号
+    def _balance_brackets(text: str) -> str:
+        stack: list[str] = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in ("{", "["):
+                stack.append(ch)
+            elif ch == "}":
+                if stack and stack[-1] == "{":
+                    stack.pop()
+            elif ch == "]":
+                if stack and stack[-1] == "[":
+                    stack.pop()
+        closers = {"{": "}", "[": "]"}
+        suffix = "".join(closers[b] for b in reversed(stack))
+        return text.rstrip(", \t\r\n") + suffix
+
+    balanced = _balance_brackets(s_clean)
+    try:
+        return json.loads(balanced)
+    except json.JSONDecodeError:
+        pass
+
+    # 控制字符深度清理与再尝试
+    s_deep = re.sub(r"[\x00-\x1f\x7f]", "", s)
+    s_deep = re.sub(r",\s*([\]}])", r"\1", s_deep)
+    s_deep_balanced = _balance_brackets(s_deep)
+    return json.loads(s_deep_balanced)
+
+
 class AgnesVision:
     """封装 Agnes chat completions 调用，产出模型规格 dict。"""
 
@@ -308,7 +368,7 @@ class AgnesVision:
             return f"{base}/chat/completions"
         return f"{base}/v1/chat/completions"
 
-    def _post_chat(self, messages: list[dict[str, Any]]) -> str:
+    def _post_chat(self, messages: list[dict[str, Any]], json_mode: bool = False) -> str:
         """公共 POST chat/completions，含 429/5xx 指数退避重试，返回原始文本。
 
         被 _chat（需解析 spec）与 _chat_raw（通用文本）共享，消除重复重试逻辑。
@@ -320,6 +380,9 @@ class AgnesVision:
             "temperature": self.config.temperature,
             "max_tokens": getattr(self.config, "max_tokens", 4096),
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
         max_attempts = 8
         for attempt in range(1, max_attempts + 1):
             try:
@@ -342,6 +405,12 @@ class AgnesVision:
                     raise RuntimeError(
                         f"Agnes 返回结构异常: {json.dumps(data, ensure_ascii=False)[:500]}"
                     ) from e
+
+            # 若服务端对 response_format 报错 (400/422)，自动降级重试
+            if code in (400, 422) and "response_format" in payload:
+                _log.warning("[agnes] 服务端暂不支持 response_format 结构化约束，降级为普通格式重试…")
+                payload.pop("response_format", None)
+                continue
 
             detail = ""
             try:
@@ -520,10 +589,10 @@ class AgnesVision:
     def _chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         """调用 Agnes chat completions 并解析出 JSON 规格。
 
-        重试逻辑统一在 _post_chat（429/5xx 指数退避）；此处仅负责把
-        原始文本解析为 spec dict。
+        重试逻辑统一在 _post_chat（429/5xx 指数退避，支持 response_format={"type": "json_object"}）；
+        此处负责把原始文本容错解析为 spec dict。
         """
-        content = self._post_chat(messages)
+        content = self._post_chat(messages, json_mode=True)
         return self._extract_spec(content)
 
     @staticmethod
@@ -534,15 +603,11 @@ class AgnesVision:
 
     @classmethod
     def _extract_spec(cls, content: str) -> dict[str, Any]:
-        """从 LLM 回复中提取 JSON 对象，容忍 markdown 代码块与前后杂文。"""
+        """从 LLM 回复中提取 JSON 对象，容忍 markdown 代码块、截断未闭合与尾逗号。"""
         try:
-            text = cls._strip_code_fence(content)
-        except ValueError as e:
-            raise SpecParseError(f"LLM 未返回 JSON 对象: {content[:300]!r}") from e
-        try:
-            spec = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise SpecParseError(f"JSON 解析失败: {e}\n原文: {text[:500]}") from e
+            spec = robust_json_loads(content)
+        except Exception as e:
+            raise SpecParseError(f"JSON 容错解析失败: {e}\n原文: {content[:400]}") from e
         if not isinstance(spec, dict) or "parts" not in spec:
-            raise SpecParseError(f"JSON 不符合规格结构(缺少 parts): {text[:300]}")
+            raise SpecParseError(f"JSON 不符合规格结构(缺少 parts): {content[:300]}")
         return spec
