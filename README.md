@@ -34,6 +34,8 @@
 ```
 
 设计要点：
+- **视觉目标主体 ROI 自动裁剪与去噪 (`auto_crop_roi`)**：预处理阶段自动分析图片背景色域与非主体杂色，将输入照片自适应裁剪至目标主体有效区域 (Region of Interest)，消除桌面杂物与冗余空白背景，使多模态视觉模型聚焦核心几何形体，显著提升长宽比反求精度并压缩视觉 Token。
+- **工业常识先验规范库与自动薄壁加固 (`apply_engineering_priors`)**：内置机械/电子壳体、承载支架、齿轮传动与免胶卡扣等领域的制造公差与工艺规范知识库；根据用户输入或模型语义自动注入标准制造参数（推荐壁厚、配合间隙），自动扫描并将过于单薄的危险壁厚加固至安全阈值（壳体 $\ge 1.6\,\text{mm}$，受力件 $\ge 2.5\,\text{mm}$），杜绝脆弱薄膜与废品打印。
 - **服务端 JSON 结构化语法约束解码与栈式容错解析 (`response_format` & `robust_json_loads`)**：API 交互引入 `response_format={"type": "json_object"}` 强制大模型在 Token 解码阶段锁定合法 JSON 语法（不支持的服务端自动优雅降级）；内置栈式括号追踪算法 `robust_json_loads`，自动清理多余尾逗号并按反序逆向补全因网络中断或 Token 截断导致的未闭合括号，彻底根除 JSON 语法崩溃。
 - **确定性语义锚点与相对几何约束求解器 (`resolve_geometric_constraints`)**：引入声明式装配相对依附语义（`attach_to` / `relative_to` / `face` / `align` / `offset`）与孔系阵列语义（`align: center` / `pattern: 4_corners` / `corner_inset`），由 Python 端包围盒求解器直接闭式推导为绝对空间坐标，彻底摆脱大模型三维浮点空间矩阵心算负担，保证孔位与装配面 100% 精确对齐。
 - **本地零延迟自愈规则库与局部差量修补 (`heal_spec_locally` & `patch_spec`)**：当 OpenSCAD 编译校验失败时，系统优先触发内存级确定性规则引擎，自动修正负/零尺寸、清洗 polyhedron 越界索引面、补全退化多边形并剔除装配悬空引用（0ms 瞬间自愈且零 Token 损耗）；若需大模型介入，通过编译器日志与行号精准定位故障部件（`extract_failing_part_id`），仅对出错部件发起局部差量 Patch 修补，杜绝全局重写的幻觉与次生破坏。
