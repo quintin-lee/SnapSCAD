@@ -620,8 +620,199 @@ def validate_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
     out["assembly"] = assembly
 
+    # 4. 几何相对约束与语义锚点求解 (Anchor & Constraint Solving)
+    out, solve_actions = resolve_geometric_constraints(out)
+    for act in solve_actions:
+        issues.append(f"几何求解器: {act}")
+
     return out, issues
 
 
+def resolve_geometric_constraints(spec: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """确定性几何约束与语义锚点求解引擎。
+
+    将相对依附语义 (attach_to / relative_to / face / align / offset / 4_corners)
+    通过包围盒矩阵闭式求解为精确的三维世界坐标，摆脱大模型空间心算误差：
+    - attach_to / relative_to: 声明依附父部件
+    - face: top / bottom / left / right / front / back
+    - align: center / min / max
+    - offset: [dx, dy, dz]
+    - holes: align: center / pattern: 4_corners (corner_inset)
+    """
+    import copy
+
+    s = copy.deepcopy(spec)
+    actions: list[str] = []
+    parts = s.setdefault("parts", [])
+
+    def _calc_part_bounds(p: dict[str, Any]) -> tuple[list[float], list[float], list[float], list[float]]:
+        prim = (p.get("primitive") or "cube").lower()
+        sz = normalize_size(prim, p)
+        raw_c = p.get("center") or [0.0, 0.0, 0.0]
+        cx, cy, cz = (float(raw_c[i]) if i < len(raw_c) else 0.0 for i in range(3))
+        if prim in ("cube", "cuboid", "box"):
+            w, d, h = sz[0], sz[1], sz[2]
+            p_min = [cx, cy, cz]
+            p_max = [cx + w, cy + d, cz + h]
+            p_center = [cx + w / 2.0, cy + d / 2.0, cz + h / 2.0]
+            dims = [w, d, h]
+        elif prim in ("cylinder", "cone", "thread", "gear", "timing_pulley"):
+            dia = sz[0]
+            h = sz[1] if len(sz) >= 2 else 10.0
+            r = dia / 2.0
+            p_min = [cx - r, cy - r, cz]
+            p_max = [cx + r, cy + r, cz + h]
+            p_center = [cx, cy, cz + h / 2.0]
+            dims = [dia, dia, h]
+        elif prim == "sphere":
+            dia = sz[0]
+            r = dia / 2.0
+            p_min = [cx - r, cy - r, cz - r]
+            p_max = [cx + r, cy + r, cz + r]
+            p_center = [cx, cy, cz]
+            dims = [dia, dia, dia]
+        else:
+            w = sz[0] if len(sz) >= 1 else 10.0
+            d = sz[1] if len(sz) >= 2 else 10.0
+            h = sz[2] if len(sz) >= 3 else 10.0
+            p_min = [cx, cy, cz]
+            p_max = [cx + w, cy + d, cz + h]
+            p_center = [cx + w / 2.0, cy + d / 2.0, cz + h / 2.0]
+            dims = [w, d, h]
+        return p_min, p_max, p_center, dims
+
+    # 1. 递归拓扑排序解析部件间 attach_to / relative_to 约束
+    part_map = {str(p.get("id", f"p_{i}")): p for i, p in enumerate(parts)}
+    solved_bounds: dict[str, tuple[list[float], list[float], list[float], list[float]]] = {}
+
+    # 先初始化无依附的基准部件
+    for pid, p in part_map.items():
+        if not p.get("attach_to") and not p.get("relative_to"):
+            solved_bounds[pid] = _calc_part_bounds(p)
+
+    # 迭代多轮求解依附部件（支持级联依附 A -> B -> C）
+    for _ in range(len(parts)):
+        progress = False
+        for pid, p in part_map.items():
+            if pid in solved_bounds:
+                continue
+            parent_id = str(p.get("attach_to") or p.get("relative_to"))
+            if parent_id in solved_bounds:
+                p_min, p_max, p_center, p_dims = solved_bounds[parent_id]
+                prim = (p.get("primitive") or "cube").lower()
+                child_sz = normalize_size(prim, p)
+                face = str(p.get("face", "top")).lower()
+                align = str(p.get("align", "center")).lower()
+                offset = p.get("offset") or [0.0, 0.0, 0.0]
+                ox = float(offset[0]) if len(offset) >= 1 else 0.0
+                oy = float(offset[1]) if len(offset) >= 2 else 0.0
+                oz = float(offset[2]) if len(offset) >= 3 else 0.0
+
+                if prim in ("cube", "cuboid", "box"):
+                    cw, cd, ch = child_sz[0], child_sz[1], child_sz[2]
+                elif prim in ("cylinder", "cone", "thread", "gear", "timing_pulley"):
+                    cw = cd = child_sz[0]
+                    ch = child_sz[1] if len(child_sz) >= 2 else 10.0
+                elif prim == "sphere":
+                    cw = cd = ch = child_sz[0]
+                else:
+                    cw = child_sz[0] if len(child_sz) >= 1 else 10.0
+                    cd = child_sz[1] if len(child_sz) >= 2 else 10.0
+                    ch = child_sz[2] if len(child_sz) >= 3 else 10.0
+
+                # 求解 XY 坐标
+                if align in ("center", "centered"):
+                    if prim in ("cube", "cuboid", "box"):
+                        new_cx = p_center[0] - cw / 2.0
+                        new_cy = p_center[1] - cd / 2.0
+                    else:
+                        new_cx = p_center[0]
+                        new_cy = p_center[1]
+                elif align in ("min", "left", "front"):
+                    new_cx = p_min[0] if prim in ("cube", "cuboid", "box") else p_min[0] + cw / 2.0
+                    new_cy = p_min[1] if prim in ("cube", "cuboid", "box") else p_min[1] + cd / 2.0
+                elif align in ("max", "right", "back"):
+                    new_cx = p_max[0] - cw if prim in ("cube", "cuboid", "box") else p_max[0] - cw / 2.0
+                    new_cy = p_max[1] - cd if prim in ("cube", "cuboid", "box") else p_max[1] - cd / 2.0
+                else:
+                    new_cx, new_cy = p_min[0], p_min[1]
+
+                # 求解 Z 与贴合面
+                if face in ("top", "+z"):
+                    new_cz = p_max[2] if prim != "sphere" else p_max[2] + ch / 2.0
+                elif face in ("bottom", "-z"):
+                    new_cz = p_min[2] - ch if prim != "sphere" else p_min[2] - ch / 2.0
+                elif face in ("right", "+x"):
+                    new_cx = p_max[0] if prim in ("cube", "cuboid", "box") else p_max[0] + cw / 2.0
+                    new_cz = p_center[2] - (ch / 2.0 if prim in ("cube", "cuboid", "box") else 0.0)
+                elif face in ("left", "-x"):
+                    new_cx = p_min[0] - cw if prim in ("cube", "cuboid", "box") else p_min[0] - cw / 2.0
+                    new_cz = p_center[2] - (ch / 2.0 if prim in ("cube", "cuboid", "box") else 0.0)
+                elif face in ("back", "+y"):
+                    new_cy = p_max[1] if prim in ("cube", "cuboid", "box") else p_max[1] + cd / 2.0
+                    new_cz = p_center[2] - (ch / 2.0 if prim in ("cube", "cuboid", "box") else 0.0)
+                elif face in ("front", "-y"):
+                    new_cy = p_min[1] - cd if prim in ("cube", "cuboid", "box") else p_min[1] - cd / 2.0
+                    new_cz = p_center[2] - (ch / 2.0 if prim in ("cube", "cuboid", "box") else 0.0)
+                else:
+                    new_cz = p_max[2]
+
+                new_cx = round(new_cx + ox, 3)
+                new_cy = round(new_cy + oy, 3)
+                new_cz = round(new_cz + oz, 3)
+
+                p["center"] = [new_cx, new_cy, new_cz]
+                p.pop("attach_to", None)
+                p.pop("relative_to", None)
+                solved_bounds[pid] = _calc_part_bounds(p)
+                actions.append(f"解算部件 {pid} 贴合于 {parent_id}.{face} -> center=[{new_cx}, {new_cy}, {new_cz}]")
+                progress = True
+        if not progress:
+            break
+
+    # 2. 求解内部孔洞对齐与 4_corners 阵列
+    for p in parts:
+        pid = str(p.get("id", "part"))
+        p_min, p_max, p_center, _ = solved_bounds.get(pid, _calc_part_bounds(p))
+        holes = p.get("holes")
+        if isinstance(holes, list) and holes:
+            resolved_holes = []
+            for h in holes:
+                h_prim = (h.get("primitive") or "cylinder").lower()
+                h_sz = normalize_hole_size(h_prim, h)
+                pattern = str(h.get("pattern", "")).lower()
+                has_corners = pattern in ("4_corners", "corners") or "corner_inset" in h or "margin" in h
+
+                if has_corners:
+                    inset = float(h.get("corner_inset", h.get("margin", 6.0)))
+                    h_cz = p_min[2]
+                    # 四个角点闭式求解
+                    corner_coords = [
+                        [p_min[0] + inset, p_min[1] + inset, h_cz],
+                        [p_max[0] - inset, p_min[1] + inset, h_cz],
+                        [p_min[0] + inset, p_max[1] - inset, h_cz],
+                        [p_max[0] - inset, p_max[1] - inset, h_cz],
+                    ]
+                    for idx, cpos in enumerate(corner_coords):
+                        ch_copy = copy.deepcopy(h)
+                        ch_copy.pop("pattern", None)
+                        ch_copy.pop("corner_inset", None)
+                        ch_copy.pop("margin", None)
+                        ch_copy["center"] = [round(cpos[0], 3), round(cpos[1], 3), round(cpos[2], 3)]
+                        resolved_holes.append(ch_copy)
+                    actions.append(f"解算部件 {pid} 四角沉孔阵列 (inset={inset}mm)")
+                elif str(h.get("align", "")).lower() in ("center", "centered"):
+                    h_cz = p_min[2]
+                    h["center"] = [round(p_center[0], 3), round(p_center[1], 3), round(h_cz, 3)]
+                    h.pop("align", None)
+                    resolved_holes.append(h)
+                    actions.append(f"解算部件 {pid} 中心对齐通孔 -> center={h['center']}")
+                else:
+                    resolved_holes.append(h)
+            p["holes"] = resolved_holes
+
+    return s, actions
+
+
 __all__ = ["validate_spec", "normalize_part", "normalize_size", "normalize_hole_size",
-           "PRIMITIVES"]
+           "resolve_geometric_constraints", "PRIMITIVES"]
