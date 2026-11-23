@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "snapscad"
-version = "2.3.0"
+version = "2.4.0"
 description = "Turn photos into parametric OpenSCAD 3D models in a snap. Visual Reverse Engineering & AI CAD Agent."
 readme = "README.md"
 requires-python = ">=3.9"

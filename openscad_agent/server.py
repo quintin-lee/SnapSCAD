@@ -148,6 +148,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
             self.send_json(models)
             return
 
+        # 2.1 紧固件数据库目录
+        if clean_path == "/api/fasteners/catalog":
+            try:
+                from .fasteners import FASTENER_CATALOG, FastenerStandard
+                self.send_json({
+                    "success": True,
+                    "catalog": FASTENER_CATALOG,
+                    "standards": [e.value for e in FastenerStandard],
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -223,6 +236,23 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                         return
                     except Exception as e:
                         self.send_json({"error": f"执行干涉检查失败: {e}"}, status=500)
+                        return
+                else:
+                    self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
+                    return
+
+            if rest.endswith("/fasteners_bom"):
+                stem = rest.replace("/fasteners_bom", "").strip()
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        from .fasteners import generate_fasteners_bom
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                        bom = generate_fasteners_bom(spec)
+                        self.send_json({"success": True, "stem": stem, "bom": bom})
+                        return
+                    except Exception as e:
+                        self.send_json({"error": f"生成紧固件 BOM 失败: {e}"}, status=500)
                         return
                 else:
                     self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
@@ -685,6 +715,94 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 紧固件实体代码在线生成
+        if clean_path == "/api/fasteners/generate":
+            part_type = str(body.get("part_type", "bolt")).lower()
+            std = body.get("standard", "ISO_4762")
+            size = body.get("size", "M3")
+            length = float(body.get("length", 12.0))
+            thread = bool(body.get("thread", True))
+            try:
+                from .fasteners import (
+                    generate_bolt_scad,
+                    generate_nut_scad,
+                    generate_washer_scad,
+                    generate_heat_set_insert_scad,
+                )
+                if "nut" in part_type:
+                    scad = generate_nut_scad(size=size)
+                elif "washer" in part_type:
+                    scad = generate_washer_scad(size=size)
+                elif "heat" in part_type or "insert" in part_type:
+                    scad = generate_heat_set_insert_scad(size=size)
+                else:
+                    scad = generate_bolt_scad(standard=std, size=size, length=length, thread=thread)
+                self.send_json({"success": True, "scad": scad, "part_type": part_type, "size": size})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # 沉槽负形切削体在线生成
+        if clean_path == "/api/fasteners/cutter":
+            cutter_type = str(body.get("cutter_type", "counterbore")).lower()
+            size = body.get("size", "M3")
+            th = float(body.get("plate_thickness", 10.0))
+            try:
+                from .fasteners import (
+                    generate_counterbore_cutter,
+                    generate_countersink_cutter,
+                    generate_hex_pocket_cutter,
+                    generate_heat_set_hole_cutter,
+                )
+                if "countersink" in cutter_type or "10642" in cutter_type:
+                    scad = generate_countersink_cutter(size=size, plate_thickness=th)
+                elif "pocket" in cutter_type or "nut" in cutter_type:
+                    side = bool(body.get("side_entry", False))
+                    scad = generate_hex_pocket_cutter(size=size, pocket_depth=float(body.get("pocket_depth", 3.0)), side_entry=side)
+                elif "heat" in cutter_type or "insert" in cutter_type:
+                    scad = generate_heat_set_hole_cutter(size=size, plate_thickness=th)
+                else:
+                    inc_w = bool(body.get("include_washer", False))
+                    scad = generate_counterbore_cutter(size=size, plate_thickness=th, include_washer=inc_w)
+                self.send_json({"success": True, "scad": scad, "cutter_type": cutter_type, "size": size})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # 规格孔特征自动升级沉头孔
+        if clean_path == "/api/fasteners/auto_counterbore":
+            stem = body.get("stem", "")
+            spec = body.get("spec")
+            if not spec and stem:
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+            if not spec:
+                self.send_json({"error": "缺少 spec 或有效 stem"}, status=400)
+                return
+            try:
+                from .fasteners import apply_auto_counterbores, generate_fasteners_bom
+                from .geometry import spec_to_scad
+                std = body.get("standard", "ISO_4762")
+                new_spec = apply_auto_counterbores(spec, default_standard=std)
+                new_scad = spec_to_scad(new_spec)
+                bom = generate_fasteners_bom(new_spec)
+                if stem and body.get("save", False):
+                    (out_dir / f"{stem}_spec.json").write_text(json.dumps(new_spec, ensure_ascii=False, indent=2), encoding="utf-8")
+                    (out_dir / f"{stem}.scad").write_text(new_scad, encoding="utf-8")
+                self.send_json({
+                    "success": True,
+                    "spec": new_spec,
+                    "scad": new_scad,
+                    "bom": bom,
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1016,6 +1134,112 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 th = float(body.get("clearance_threshold", 0.30))
                 report = check_assembly_interference(spec, clearance_threshold_mm=th)
                 return {"success": True, "stem": stem, "report": report.to_dict()}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/fasteners/catalog")
+        def get_fasteners_catalog() -> dict[str, Any]:
+            from .fasteners import FASTENER_CATALOG, FastenerStandard
+            return {
+                "success": True,
+                "catalog": FASTENER_CATALOG,
+                "standards": [e.value for e in FastenerStandard],
+            }
+
+        @app.get("/api/model/{stem}/fasteners_bom")
+        def get_model_fasteners_bom(stem: str) -> dict[str, Any]:
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .fasteners import generate_fasteners_bom
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                bom = generate_fasteners_bom(spec)
+                return {"success": True, "stem": stem, "bom": bom}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/fasteners/generate")
+        def generate_fastener_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            part_type = str(body.get("part_type", "bolt")).lower()
+            std = body.get("standard", "ISO_4762")
+            size = body.get("size", "M3")
+            length = float(body.get("length", 12.0))
+            thread = bool(body.get("thread", True))
+            try:
+                from .fasteners import (
+                    generate_bolt_scad,
+                    generate_nut_scad,
+                    generate_washer_scad,
+                    generate_heat_set_insert_scad,
+                )
+                if "nut" in part_type:
+                    scad = generate_nut_scad(size=size)
+                elif "washer" in part_type:
+                    scad = generate_washer_scad(size=size)
+                elif "heat" in part_type or "insert" in part_type:
+                    scad = generate_heat_set_insert_scad(size=size)
+                else:
+                    scad = generate_bolt_scad(standard=std, size=size, length=length, thread=thread)
+                return {"success": True, "scad": scad, "part_type": part_type, "size": size}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/fasteners/cutter")
+        def generate_cutter_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            cutter_type = str(body.get("cutter_type", "counterbore")).lower()
+            size = body.get("size", "M3")
+            th = float(body.get("plate_thickness", 10.0))
+            try:
+                from .fasteners import (
+                    generate_counterbore_cutter,
+                    generate_countersink_cutter,
+                    generate_hex_pocket_cutter,
+                    generate_heat_set_hole_cutter,
+                )
+                if "countersink" in cutter_type or "10642" in cutter_type:
+                    scad = generate_countersink_cutter(size=size, plate_thickness=th)
+                elif "pocket" in cutter_type or "nut" in cutter_type:
+                    side = bool(body.get("side_entry", False))
+                    scad = generate_hex_pocket_cutter(size=size, pocket_depth=float(body.get("pocket_depth", 3.0)), side_entry=side)
+                elif "heat" in cutter_type or "insert" in cutter_type:
+                    scad = generate_heat_set_hole_cutter(size=size, plate_thickness=th)
+                else:
+                    inc_w = bool(body.get("include_washer", False))
+                    scad = generate_counterbore_cutter(size=size, plate_thickness=th, include_washer=inc_w)
+                return {"success": True, "scad": scad, "cutter_type": cutter_type, "size": size}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/fasteners/auto_counterbore")
+        def auto_counterbore_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            spec = body.get("spec")
+            if not spec and stem:
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+            if not spec:
+                raise HTTPException(status_code=400, detail="缺少 spec 或有效 stem")
+            try:
+                from .fasteners import apply_auto_counterbores, generate_fasteners_bom
+                from .geometry import spec_to_scad
+                std = body.get("standard", "ISO_4762")
+                new_spec = apply_auto_counterbores(spec, default_standard=std)
+                new_scad = spec_to_scad(new_spec)
+                bom = generate_fasteners_bom(new_spec)
+                if stem and body.get("save", False):
+                    (out_dir / f"{stem}_spec.json").write_text(json.dumps(new_spec, ensure_ascii=False, indent=2), encoding="utf-8")
+                    (out_dir / f"{stem}.scad").write_text(new_scad, encoding="utf-8")
+                return {
+                    "success": True,
+                    "spec": new_spec,
+                    "scad": new_scad,
+                    "bom": bom,
+                }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

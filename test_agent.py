@@ -1864,6 +1864,8 @@ def test_cellular_lattice_and_lightweighting():
     from openscad_agent.core import OpenscadRenderer, AgentConfig
     from openscad_agent.server import serve_assets, stop_server
     import requests
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
 
     # 1. 验证各种晶格微结构生成器输出与减重估算
     hc_scad = generate_honeycomb_scad(40, 30, 10, cell_size=8.0, wall_thickness=1.2)
@@ -2158,6 +2160,215 @@ def test_physical_collision_and_interference_doctor():
             stop_server()
 
 
+def test_standard_fasteners_and_counterbore_engine():
+    """测试 44: 螺栓标准件智能紧固库与垫圈/沉头孔自动配准引擎 (fasteners)"""
+    from openscad_agent.fasteners import (
+        FASTENER_CATALOG,
+        FastenerStandard,
+        generate_bolt_scad,
+        generate_nut_scad,
+        generate_washer_scad,
+        generate_heat_set_insert_scad,
+        generate_counterbore_cutter,
+        generate_countersink_cutter,
+        generate_hex_pocket_cutter,
+        generate_heat_set_hole_cutter,
+        match_fastener_for_hole,
+        generate_fasteners_bom,
+        apply_auto_counterbores,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证标准紧固件数据库目录完整性 (M2 ~ M10)
+    for m in ["M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10"]:
+        assert m in FASTENER_CATALOG
+        entry = FASTENER_CATALOG[m]
+        assert "nominal_d" in entry
+        assert "pitch" in entry
+        assert "clearance_hole" in entry
+        assert "iso4762" in entry
+        assert "iso10642" in entry
+        assert "iso4032" in entry
+        assert "iso7089" in entry
+        assert "heat_set" in entry
+
+    # 2. 验证独立标准件实体 OpenSCAD 代码生成与底层无头 CGAL 编译
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+
+        # 2.1 ISO 4762 M3x16 内六角圆柱头螺钉
+        bolt_scad = generate_bolt_scad("ISO_4762", size="M3", length=16.0, thread=True)
+        assert "ISO_4762 M3" in bolt_scad
+        assert "cylinder(d = 3.00" in bolt_scad
+        assert "cylinder(d = 5.50" in bolt_scad
+        f_bolt = tmp_dir / "test_bolt.scad"
+        f_bolt.write_text(bolt_scad, encoding="utf-8")
+        out_stl = tmp_dir / "test_bolt.stl"
+        renderer.export_model(f_bolt, out_stl, force=True)
+        assert out_stl.exists()
+
+        # 2.2 ISO 10642 M4x20 90° 沉头螺钉
+        cs_scad = generate_bolt_scad("ISO_10642", size="M4", length=20.0, thread=False)
+        assert "ISO_10642 M4" in cs_scad
+        assert "cylinder(d1 = 4.00, d2 = 8.00" in cs_scad
+
+        # 2.3 ISO 4032 M3 六角螺母
+        nut_scad = generate_nut_scad(size="M3")
+        assert "ISO 4032 M3" in nut_scad
+        assert "$fn = 6" in nut_scad
+
+        # 2.4 ISO 7089 M3 平垫圈
+        washer_scad = generate_washer_scad(size="M3")
+        assert "ISO 7089 M3" in washer_scad
+
+        # 2.5 热熔铜螺母 (Heat-Set Insert)
+        hs_scad = generate_heat_set_insert_scad(size="M3")
+        assert "Heat-Set Insert M3" in hs_scad
+
+        # 3. 验证负形沉头/螺母沉槽切削模块生成与 difference 扣除编译
+        cutter_scad = generate_counterbore_cutter("M3", plate_thickness=10.0, include_washer=True)
+        assert "module counterbore_cutter_m3()" in cutter_scad
+        # 组装布尔差集场景并导出验证
+        assembly_diff_scad = f"""
+{cutter_scad}
+difference() {{
+    cube([20, 20, 10], center = true);
+    counterbore_cutter_m3();
+}}
+"""
+        f_diff = tmp_dir / "test_diff.scad"
+        f_diff.write_text(assembly_diff_scad, encoding="utf-8")
+        out_diff_stl = tmp_dir / "test_diff.stl"
+        renderer.export_model(f_diff, out_diff_stl, force=True)
+        assert out_diff_stl.exists()
+
+        # 验证侧插螺母防转槽切削体
+        nut_pocket_scad = generate_hex_pocket_cutter("M3", pocket_depth=3.0, side_entry=True)
+        assert "module nut_pocket_cutter_m3()" in nut_pocket_scad
+        assert "侧边滑入导轨插槽" in nut_pocket_scad
+
+        # 验证热熔安装孔切削体
+        heat_hole_scad = generate_heat_set_hole_cutter("M3", plate_thickness=8.0)
+        assert "module heat_set_hole_cutter_m3()" in heat_hole_scad
+        assert "锥度配合主体孔" in heat_hole_scad
+
+    # 4. 验证孔径智能匹配
+    m_sz, _ = match_fastener_for_hole(3.2)
+    assert m_sz == "M3"
+    m_sz4, _ = match_fastener_for_hole(4.5)
+    assert m_sz4 == "M4"
+    m_sz8, _ = match_fastener_for_hole(8.2)
+    assert m_sz8 == "M8"
+
+    # 5. 验证装配紧固件 BOM 清单分析与 Markdown 表格生成
+    sample_spec = {
+        "name": "electronic_chassis",
+        "parts": [
+            {
+                "id": "front_panel",
+                "name": "前壳外罩",
+                "size": [60, 40, 6],
+                "holes": [
+                    {"primitive": "cylinder", "size": [3.2, 6.0], "center": [5, 5, 0]},
+                    {"primitive": "cylinder", "size": [3.2, 6.0], "center": [55, 5, 0]},
+                    {"primitive": "counterbore", "standard": "M4", "size": [4.5, 6.0], "center": [30, 20, 0]},
+                ]
+            },
+            {
+                "id": "bottom_plate",
+                "name": "底板承载座",
+                "size": [60, 40, 10],
+                "holes": [
+                    {"primitive": "counterbore", "standard": "M3", "size": [3.4, 10.0], "center": [5, 5, 0]},
+                    {"primitive": "counterbore", "standard": "M3", "size": [3.4, 10.0], "center": [55, 5, 0]},
+                ]
+            }
+        ]
+    }
+
+    bom = generate_fasteners_bom(sample_spec)
+    assert bom["total_count"] == 5  # 2个M3通孔 + 1个M4沉头 + 2个M3底座沉孔 = 5件
+    assert len(bom["items"]) >= 2
+    assert "### 🔩 标准紧固件装配物料清单" in bom["summary_markdown"]
+    assert "**M3**" in bom["summary_markdown"]
+    assert "**M4**" in bom["summary_markdown"]
+
+    # 6. 验证自动沉头孔升级增强
+    upgraded_spec = apply_auto_counterbores(sample_spec, default_standard="ISO_4762")
+    front_p = upgraded_spec["parts"][0]
+    # 原先的 2 个 cylinder 孔应该自动升级为 counterbore
+    assert front_p["holes"][0]["primitive"] == "counterbore"
+    assert front_p["holes"][0]["standard"] == "M3"
+    assert front_p["holes"][1]["primitive"] == "counterbore"
+
+    # 7. 验证 REST API 微服务端点
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        spec_f = work_dir / "bom_model_spec.json"
+        spec_f.write_text(json.dumps(sample_spec), encoding="utf-8")
+
+        _, _, port = serve_assets(work_dir, port=8992, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 7.1 GET /api/fasteners/catalog
+            r_cat = requests.get(f"{base}/api/fasteners/catalog", timeout=5)
+            assert r_cat.status_code == 200
+            d_cat = r_cat.json()
+            assert d_cat["success"] is True
+            assert "M3" in d_cat["catalog"]
+            assert "ISO_4762" in d_cat["standards"]
+
+            # 7.2 GET /api/model/{stem}/fasteners_bom
+            r_bom = requests.get(f"{base}/api/model/bom_model/fasteners_bom", timeout=5)
+            assert r_bom.status_code == 200
+            d_bom = r_bom.json()
+            assert d_bom["success"] is True
+            assert d_bom["bom"]["total_count"] == 5
+
+            # 7.3 POST /api/fasteners/generate
+            r_gen = requests.post(f"{base}/api/fasteners/generate", json={
+                "standard": "ISO_4762",
+                "size": "M3",
+                "length": 14.0,
+                "part_type": "bolt",
+            }, timeout=5)
+            assert r_gen.status_code == 200
+            d_gen = r_gen.json()
+            assert d_gen["success"] is True
+            assert "ISO_4762 M3" in d_gen["scad"]
+
+            # 7.4 POST /api/fasteners/cutter
+            r_cut = requests.post(f"{base}/api/fasteners/cutter", json={
+                "cutter_type": "counterbore",
+                "size": "M4",
+                "plate_thickness": 8.0,
+            }, timeout=5)
+            assert r_cut.status_code == 200
+            d_cut = r_cut.json()
+            assert d_cut["success"] is True
+            assert "counterbore_cutter_m4" in d_cut["scad"]
+
+            # 7.5 POST /api/fasteners/auto_counterbore
+            r_auto = requests.post(f"{base}/api/fasteners/auto_counterbore", json={
+                "stem": "bom_model",
+                "standard": "ISO_4762",
+                "save": True,
+            }, timeout=5)
+            assert r_auto.status_code == 200
+            d_auto = r_auto.json()
+            assert d_auto["success"] is True
+            assert d_auto["spec"]["parts"][0]["holes"][0]["primitive"] == "counterbore"
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2208,6 +2419,7 @@ def run_all_tests() -> bool:
         ("轻量化减重拓扑与点阵晶格/蜂窝功能性微结构生成器 (lattice)", test_cellular_lattice_and_lightweighting),
         ("工业级装配体拆解路径推导与 3D 装配工艺流程引擎 (assembly_sop)", test_assembly_sop_and_exploded_sequence),
         ("真实物理碰撞检测与多构件装配干涉校验引擎 (interference)", test_physical_collision_and_interference_doctor),
+        ("螺栓标准件智能紧固库与垫圈/沉头孔自动配准引擎 (fasteners)", test_standard_fasteners_and_counterbore_engine),
     ]
 
     all_ok = True

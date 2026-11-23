@@ -778,6 +778,10 @@ class MainWindow(QMainWindow):
         self.btn_clash.clicked.connect(self.on_check_assembly_interference)
         act_bar.addWidget(self.btn_clash)
 
+        self.btn_fasteners = QPushButton("🔩 紧固件库")
+        self.btn_fasteners.clicked.connect(self.on_open_fasteners_dialog)
+        act_bar.addWidget(self.btn_fasteners)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1760,6 +1764,120 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:
             QMessageBox.warning(self, "体检失败", f"干涉校验异常: {e}")
+
+    def on_open_fasteners_dialog(self) -> None:
+        """打开标准公制紧固件选择与负形沉头切削模块生成器。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+        from openscad_agent.fasteners import (
+            FASTENER_CATALOG,
+            FastenerStandard,
+            generate_bolt_scad,
+            generate_nut_scad,
+            generate_washer_scad,
+            generate_heat_set_insert_scad,
+            generate_counterbore_cutter,
+            generate_countersink_cutter,
+            generate_hex_pocket_cutter,
+            generate_heat_set_hole_cutter,
+            generate_fasteners_bom,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔩 标准紧固件与沉头孔配置库 (ISO / Heat-Set)")
+        dlg.resize(520, 480)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("紧固件类型:"), 0, 0)
+        cmb_type = QComboBox()
+        cmb_type.addItems([
+            "ISO 4762 (内六角圆柱头螺钉)",
+            "ISO 10642 (90° 沉头螺钉)",
+            "ISO 7380 (内六角半圆头螺钉)",
+            "ISO 4032 (六角螺母)",
+            "ISO 7089 (标准平垫圈)",
+            "热熔铜螺母 (Heat-Set Insert)",
+        ])
+        form_lay.addWidget(cmb_type, 0, 1)
+
+        form_lay.addWidget(QLabel("公称规格:"), 1, 0)
+        cmb_size = QComboBox()
+        cmb_size.addItems(["M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10"])
+        cmb_size.setCurrentText("M3")
+        form_lay.addWidget(cmb_size, 1, 1)
+
+        form_lay.addWidget(QLabel("公称长度 / 板厚 (mm):"), 2, 0)
+        spn_len = QDoubleSpinBox()
+        spn_len.setRange(2.0, 100.0)
+        spn_len.setValue(12.0)
+        spn_len.setSingleStep(1.0)
+        form_lay.addWidget(spn_len, 2, 1)
+
+        d_lay.addLayout(form_lay)
+
+        txt_preview = QTextEdit()
+        txt_preview.setPlaceholderText("// 紧固件实体代码或差集切削模块预览…")
+        txt_preview.setFontFamily("Monospace")
+        txt_preview.setFontPointSize(9)
+        d_lay.addWidget(txt_preview)
+
+        def update_preview():
+            t_idx = cmb_type.currentIndex()
+            sz = cmb_size.currentText()
+            l = spn_len.value()
+            if t_idx == 0:
+                txt_preview.setText(generate_bolt_scad("ISO_4762", size=sz, length=l, thread=True))
+            elif t_idx == 1:
+                txt_preview.setText(generate_bolt_scad("ISO_10642", size=sz, length=l, thread=True))
+            elif t_idx == 2:
+                txt_preview.setText(generate_bolt_scad("ISO_7380", size=sz, length=l, thread=True))
+            elif t_idx == 3:
+                txt_preview.setText(generate_nut_scad(size=sz))
+            elif t_idx == 4:
+                txt_preview.setText(generate_washer_scad(size=sz))
+            elif t_idx == 5:
+                txt_preview.setText(generate_heat_set_insert_scad(size=sz))
+
+        cmb_type.currentIndexChanged.connect(lambda _: update_preview())
+        cmb_size.currentIndexChanged.connect(lambda _: update_preview())
+        spn_len.valueChanged.connect(lambda _: update_preview())
+        update_preview()
+
+        btn_row = QHBoxLayout()
+        btn_copy_cutter = QPushButton("✂️ 复制差集沉孔切削代码")
+        def copy_cutter():
+            t_idx = cmb_type.currentIndex()
+            sz = cmb_size.currentText()
+            l = spn_len.value()
+            if t_idx == 1:
+                code = generate_countersink_cutter(size=sz, plate_thickness=l)
+            elif t_idx == 3:
+                code = generate_hex_pocket_cutter(size=sz, pocket_depth=3.0)
+            elif t_idx == 5:
+                code = generate_heat_set_hole_cutter(size=sz, plate_thickness=l)
+            else:
+                code = generate_counterbore_cutter(size=sz, plate_thickness=l)
+            QApplication.clipboard().setText(code)
+            QMessageBox.information(dlg, "已复制", "差集负形沉头切削模块代码已成功复制到剪贴板！\n可直接在 OpenSCAD 代码中使用 difference() 扣除。")
+
+        btn_copy_cutter.clicked.connect(copy_cutter)
+        btn_row.addWidget(btn_copy_cutter)
+
+        btn_load_editor = QPushButton("📥 载入至源码区")
+        def load_to_editor():
+            if hasattr(self, "txt_scad"):
+                self.txt_scad.setPlainText(txt_preview.toPlainText())
+                dlg.accept()
+                self.log("📥 紧固件实体代码已载入 OpenSCAD 源码编辑器")
+        btn_load_editor.clicked.connect(load_to_editor)
+        btn_row.addWidget(btn_load_editor)
+
+        d_lay.addLayout(btn_row)
+
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

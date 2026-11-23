@@ -285,6 +285,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-lattice', this)">🪶 减重晶格</button>
       <button class="tab-btn" onclick="switchTab('tab-sop', this)">🛠️ 装配工艺</button>
       <button class="tab-btn" onclick="switchTab('tab-clash', this)">🔍 干涉检查</button>
+      <button class="tab-btn" onclick="switchTab('tab-fasteners', this)">🔩 紧固件库</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -507,6 +508,67 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <div id="clash-summary-text" style="font-size:0.75rem;color:var(--text-muted);line-height:1.4;">-</div>
       </div>
       <div id="clash-list" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;"></div>
+    </div>
+
+    <!-- 工业紧固件库与沉头孔配准面板 -->
+    <div id="tab-fasteners" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🔩 标准紧固件库与沉孔配准 (Fasteners Library)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        ISO 4762 / 10642 / 7380 / 4032 / 7089 公制标准紧固件与 3D 打印热熔嵌件。
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">标准规范:</label>
+          <select id="fastener-std" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="ISO_4762">ISO 4762 (内六角圆柱头)</option>
+            <option value="ISO_10642">ISO 10642 (90° 沉头螺钉)</option>
+            <option value="ISO_7380">ISO 7380 (内六角半圆头)</option>
+            <option value="ISO_4032">ISO 4032 (六角螺母)</option>
+            <option value="ISO_7089">ISO 7089 (标准平垫圈)</option>
+            <option value="HEAT_SET">热熔铜螺母 (Heat-Set)</option>
+          </select>
+        </div>
+        <div style="width:75px;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">规格:</label>
+          <select id="fastener-size" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="M2">M2</option>
+            <option value="M2.5">M2.5</option>
+            <option value="M3" selected>M3</option>
+            <option value="M4">M4</option>
+            <option value="M5">M5</option>
+            <option value="M6">M6</option>
+            <option value="M8">M8</option>
+            <option value="M10">M10</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">螺栓长度 / 板厚 (mm):</label>
+          <input type="number" id="fastener-len" value="12" min="4" max="80" step="1" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;display:flex;align-items:flex-end;">
+          <label style="font-size:0.75rem;color:var(--text);display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="fastener-thread" checked> 刻画物理牙型
+          </label>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button onclick="triggerGenerateFastener()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;">⚡ 生成实体源码</button>
+        <button onclick="triggerCopyCutter()" class="btn-secondary" style="flex:1;padding:6px;font-size:0.75rem;">✂️ 复制差集切削体</button>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button onclick="triggerAutoCounterbore()" class="btn-secondary" style="flex:1;padding:6px;font-size:0.75rem;border-color:#3b82f6;color:#60a5fa;">🔄 自动沉头孔增强</button>
+        <button onclick="triggerFastenersBOM()" class="btn-secondary" style="flex:1;padding:6px;font-size:0.75rem;border-color:#10b981;color:#34d399;">📋 装配 BOM 统计</button>
+      </div>
+
+      <div id="fastener-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:220px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -1781,6 +1843,149 @@ async function triggerExportLib() {
     }
   } catch (e) {
     alert('导出异常: ' + e);
+  }
+}
+
+async function triggerGenerateFastener() {
+  const std = document.getElementById('fastener-std').value;
+  const size = document.getElementById('fastener-size').value;
+  const length = parseFloat(document.getElementById('fastener-len').value) || 12;
+  const thread = document.getElementById('fastener-thread').checked;
+  const box = document.getElementById('fastener-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在生成紧固件实体代码...';
+
+  let partType = 'bolt';
+  if (std === 'ISO_4032') partType = 'nut';
+  else if (std === 'ISO_7089') partType = 'washer';
+  else if (std === 'HEAT_SET') partType = 'heat_set';
+
+  try {
+    const res = await fetch('/api/fasteners/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ standard: std, size: size, length: length, thread: thread, part_type: partType })
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      document.getElementById('scad-editor').value = data.scad;
+      box.innerHTML = `
+        <div style="color:#10b981;font-weight:600;margin-bottom:4px;">✅ 紧固件源码已载入源码编辑器</div>
+        <div style="color:var(--text-muted);font-size:0.7rem;">可直接在 [SCAD 源码] 标签页中点击求值渲染或导出 STL。</div>
+      `;
+      switchTab('tab-editor', document.querySelector('.tab-btn'));
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">网络异常: ${e}</div>`;
+  }
+}
+
+async function triggerCopyCutter() {
+  const std = document.getElementById('fastener-std').value;
+  const size = document.getElementById('fastener-size').value;
+  const th = parseFloat(document.getElementById('fastener-len').value) || 10;
+  const box = document.getElementById('fastener-result-box');
+  box.style.display = 'block';
+
+  let cutterType = 'counterbore';
+  if (std === 'ISO_10642') cutterType = 'countersink';
+  else if (std === 'ISO_4032') cutterType = 'pocket';
+  else if (std === 'HEAT_SET') cutterType = 'heat_set';
+
+  try {
+    const res = await fetch('/api/fasteners/cutter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cutter_type: cutterType, size: size, plate_thickness: th })
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      await navigator.clipboard.writeText(data.scad);
+      box.innerHTML = `
+        <div style="color:#10b981;font-weight:600;margin-bottom:4px;">📋 切削模块已复制到剪贴板！</div>
+        <pre style="background:rgba(0,0,0,0.3);padding:6px;border-radius:4px;overflow-x:auto;font-size:0.7rem;">${data.scad}</pre>
+        <div style="color:var(--text-muted);font-size:0.7rem;">用法: difference() { 实体(); 模块(); }</div>
+      `;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成切削体失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">复制异常: ${e}</div>`;
+  }
+}
+
+async function triggerAutoCounterbore() {
+  if (!activeModelStem) {
+    alert('请先选择一个模型');
+    return;
+  }
+  const std = document.getElementById('fastener-std').value;
+  const box = document.getElementById('fastener-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在智能配准安装孔并升级沉头沉槽...';
+
+  try {
+    const res = await fetch('/api/fasteners/auto_counterbore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, standard: std, save: true })
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (data.scad) {
+        document.getElementById('scad-editor').value = data.scad;
+      }
+      box.innerHTML = `
+        <div style="color:#10b981;font-weight:600;margin-bottom:4px;">✅ 成功升级并保存沉头孔特征</div>
+        <div style="color:var(--text-muted);font-size:0.7rem;">已自动注入标准公制紧固件沉孔规范，可点击 [求值编译] 重新生成 3D 模型。</div>
+      `;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">升级失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
+  }
+}
+
+async function triggerFastenersBOM() {
+  if (!activeModelStem) {
+    alert('请先选择一个模型');
+    return;
+  }
+  const box = document.getElementById('fastener-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在提取紧固件物料清单 (BOM)...';
+
+  try {
+    const res = await fetch(`/api/model/${activeModelStem}/fasteners_bom`);
+    const data = await res.json();
+    if (data.success && data.bom) {
+      const bom = data.bom;
+      let html = `<div style="font-weight:600;color:var(--accent);margin-bottom:4px;">🔩 紧固件合计需求: ${bom.total_count} 件</div>`;
+      if (bom.items && bom.items.length > 0) {
+        html += '<table style="width:100%;border-collapse:collapse;font-size:0.7rem;text-align:left;">';
+        html += '<tr style="border-bottom:1px solid var(--border);color:var(--text-muted);"><th>标准</th><th>规格</th><th>长</th><th>量</th><th>类型</th></tr>';
+        bom.items.forEach(it => {
+          html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:2px 4px;">${it.standard}</td>
+            <td style="padding:2px 4px;font-weight:600;">${it.size}</td>
+            <td style="padding:2px 4px;">${it.nominal_length}mm</td>
+            <td style="padding:2px 4px;color:#10b981;font-weight:600;">x${it.quantity}</td>
+            <td style="padding:2px 4px;color:var(--text-muted);">${it.recess_type}</td>
+          </tr>`;
+        });
+        html += '</table>';
+      } else {
+        html += '<div style="color:var(--text-muted);">未检测到需要外购的紧固件特征。</div>';
+      }
+      box.innerHTML = html;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">提取 BOM 失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">获取 BOM 异常: ${e}</div>`;
   }
 }
 
