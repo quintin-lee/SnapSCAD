@@ -43,6 +43,13 @@ from .assembly_sop import (
     generate_assembly_animation_scad,
     generate_sop_guide_html,
 )
+from .interference import (
+    AABB3D,
+    ClashRecord,
+    InterferenceReport,
+    compute_part_aabb,
+    check_assembly_interference,
+)
 
 __all__ = [
     "AgentConfig",
@@ -88,6 +95,11 @@ __all__ = [
     "derive_assembly_sequence",
     "generate_assembly_animation_scad",
     "generate_sop_guide_html",
+    "AABB3D",
+    "ClashRecord",
+    "InterferenceReport",
+    "compute_part_aabb",
+    "check_assembly_interference",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

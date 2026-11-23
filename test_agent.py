@@ -2041,6 +2041,123 @@ def test_assembly_sop_and_exploded_sequence():
             stop_server()
 
 
+def test_physical_collision_and_interference_doctor():
+    """测试 43: 真实物理碰撞检测与多构件装配干涉校验引擎 (interference)"""
+    from openscad_agent.interference import (
+        compute_part_aabb,
+        check_assembly_interference,
+        AABB3D,
+    )
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证 AABB 几何包围盒与旋转映射
+    p_box = {"primitive": "cube", "size": [20, 30, 10], "center": [10, 20, 0]}
+    aabb1 = compute_part_aabb(p_box)
+    assert aabb1.min_x == 10.0 and aabb1.max_x == 30.0
+    assert aabb1.min_y == 20.0 and aabb1.max_y == 50.0
+    assert aabb1.min_z == 0.0 and aabb1.max_z == 10.0
+
+    # 2. 验证多构件硬干涉碰撞 (Hard Clash) 与最小分离向量 MTV
+    spec_clash = {
+        "name": "clash_model",
+        "parts": [
+            {"id": "block_a", "primitive": "cube", "size": [30, 30, 20], "center": [0, 0, 0]},
+            {"id": "block_b", "primitive": "cube", "size": [30, 30, 20], "center": [15, 0, 0]},  # X 轴重叠 15mm
+        ],
+    }
+    rep_clash = check_assembly_interference(spec_clash)
+    assert rep_clash.is_assembly_valid is False
+    assert rep_clash.hard_clashes_count == 1
+    assert rep_clash.clashes[0].clash_type == "HARD_CLASH"
+    assert rep_clash.clashes[0].overlap_volume_mm3 > 0.0
+    assert rep_clash.clashes[0].mtv[0] != 0.0  # 建议沿 X 轴分离
+
+    # 3. 验证孔轴配合过盈阻滞干涉 (Fit Interference)
+    spec_fit_clash = {
+        "name": "fit_clash_model",
+        "parts": [
+            {
+                "id": "hub",
+                "primitive": "cube",
+                "size": [50, 50, 20],
+                "center": [0, 0, 0],
+                "holes": [{"primitive": "cylinder", "size": [10.0, 25], "center": [25, 25, 0]}],
+            },
+            {
+                "id": "axle",
+                "primitive": "cylinder",
+                "size": [10.6, 30],  # 轴径 10.6mm 大于孔径 10.0mm 造成配合过盈干涉
+                "center": [25, 25, 0],
+            },
+        ],
+    }
+    rep_fit = check_assembly_interference(spec_fit_clash)
+    assert rep_fit.is_assembly_valid is False
+    assert rep_fit.fit_interferences_count == 1
+    assert rep_fit.clashes[0].clash_type == "FIT_INTERFERENCE"
+    assert "过盈" in rep_fit.clashes[0].description
+
+    # 4. 验证临界间隙预警 (Clearance Warning) 与合规装配 (Clean)
+    spec_clean = {
+        "name": "clean_model",
+        "parts": [
+            {
+                "id": "base",
+                "primitive": "cube",
+                "size": [40, 40, 10],
+                "center": [0, 0, 0],
+                "holes": [{"primitive": "cylinder", "size": [10.5, 15], "center": [20, 20, 0]}],
+            },
+            {
+                "id": "pin",
+                "primitive": "cylinder",
+                "size": [10.0, 20],  # 留有 0.5mm 间隙
+                "center": [20, 20, 0],
+            },
+            {
+                "id": "stand",
+                "primitive": "cube",
+                "size": [20, 20, 10],
+                "center": [40.2, 0, 0],  # 间隙仅 0.2mm (< 0.30mm 阈值)
+            },
+        ],
+    }
+    rep_clean = check_assembly_interference(spec_clean, clearance_threshold_mm=0.30)
+    assert rep_clean.is_assembly_valid is True  # 无硬碰撞，整体合规
+    assert rep_clean.clearance_warnings_count == 1  # 间隙 0.2mm 触发预警
+
+    # 5. 验证微服务 REST API 端点 /api/model/{stem}/interference 与 /api/interference/check
+    with tempfile.TemporaryDirectory() as td:
+        work_dir = Path(td)
+        spec_f = work_dir / "clash_model_spec.json"
+        spec_f.write_text(json.dumps(spec_clash), encoding="utf-8")
+
+        _, _, port = serve_assets(work_dir, port=8991, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 测试 GET 干涉报告端点
+            r_get = requests.get(f"{base}/api/model/clash_model/interference", timeout=5)
+            assert r_get.status_code == 200
+            d_get = r_get.json()
+            assert d_get["hard_clashes_count"] == 1
+            assert d_get["is_assembly_valid"] is False
+
+            # 测试 POST 动态阈值校验端点
+            r_post = requests.post(f"{base}/api/interference/check", json={
+                "stem": "clash_model",
+                "clearance_threshold": 0.5,
+            }, timeout=10)
+            assert r_post.status_code == 200
+            d_post = r_post.json()
+            assert d_post["success"] is True
+            assert d_post["report"]["hard_clashes_count"] == 1
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2090,6 +2207,7 @@ def run_all_tests() -> bool:
         ("多色多耗材 3MF 生产切片工程文件导出与多喷头工具映射 (mmu)", test_multimaterial_3mf_export_and_slicing_metadata),
         ("轻量化减重拓扑与点阵晶格/蜂窝功能性微结构生成器 (lattice)", test_cellular_lattice_and_lightweighting),
         ("工业级装配体拆解路径推导与 3D 装配工艺流程引擎 (assembly_sop)", test_assembly_sop_and_exploded_sequence),
+        ("真实物理碰撞检测与多构件装配干涉校验引擎 (interference)", test_physical_collision_and_interference_doctor),
     ]
 
     all_ok = True

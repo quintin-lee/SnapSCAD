@@ -774,6 +774,10 @@ class MainWindow(QMainWindow):
         self.btn_export_sop.clicked.connect(self.on_export_assembly_sop)
         act_bar.addWidget(self.btn_export_sop)
 
+        self.btn_clash = QPushButton("🔍 干涉体检")
+        self.btn_clash.clicked.connect(self.on_check_assembly_interference)
+        act_bar.addWidget(self.btn_clash)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1718,6 +1722,44 @@ class MainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_sop)))
         except Exception as e:
             QMessageBox.warning(self, "生成失败", f"导出装配指导书异常: {e}")
+
+    def on_check_assembly_interference(self) -> None:
+        """对当前装配体执行三维包围盒碰撞检测与孔轴配合过盈干涉体检。"""
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        from openscad_agent.interference import check_assembly_interference
+        try:
+            spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+            report = check_assembly_interference(spec, clearance_threshold_mm=0.30)
+            self.log(f"🔍 装配物理干涉校验完成: 硬碰撞={report.hard_clashes_count}, 配合过盈={report.fit_interferences_count}, 临界预警={report.clearance_warnings_count}")
+
+            if report.is_assembly_valid and report.clearance_warnings_count == 0:
+                QMessageBox.information(
+                    self, "干涉检查通过",
+                    f"✅ 装配体验证完美！\n\n已校验全部 {report.total_pairs_checked} 对构件组合，无空间实体碰撞、无配合过盈且安全间隙充裕。"
+                )
+            else:
+                details = []
+                for c in report.clashes[:5]:
+                    details.append(f"• [{c.part_a} ⚡ {c.part_b}] ({c.clash_type}): {c.description}\n  建议: {c.resolution_advice}")
+                if len(report.clashes) > 5:
+                    details.append(f"... 另有 {len(report.clashes) - 5} 项干涉")
+
+                title = "装配存在严重干涉" if not report.is_assembly_valid else "装配间隙预警"
+                icon_fn = QMessageBox.critical if not report.is_assembly_valid else QMessageBox.warning
+                icon_fn(
+                    self, title,
+                    f"{report.summary}\n\n冲突明细:\n" + "\n\n".join(details)
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "体检失败", f"干涉校验异常: {e}")
 
     def on_export_library(self) -> None:
         """把当前模型封装导出为标准 OpenSCAD 模块生态库包。"""

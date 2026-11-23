@@ -34,6 +34,7 @@
 ```
 
 设计要点：
+- **真实物理碰撞检测与多构件装配干涉校验引擎 (`interference.py`)**：基于 3D 轴对齐包围盒 (AABB) 与欧拉旋转定向包围盒 (OBB)，全自动排查多构件装配体中肉眼难以察觉的内部实体体积硬重叠碰撞 (`HARD_CLASH`)、孔轴过盈阻滞配合 (`FIT_INTERFERENCE`) 以及低于 3D 打印热熔粘连阈值的危险间隙 (`CLEARANCE_WARNING`)；输出最小分离位移向量 (MTV) 与参数化修正建议，协同工作台支持可视化干涉体检与冲突部件一键排查。
 - **工业级装配体拆解路径推导与 3D 装配工艺流程引擎 (`assembly_sop.py`)**：依据构件物理依赖拓扑，推导无碰撞物理脱出向量（Collision-Free Withdrawal Vector）与标准化装配工步（先基座 -> 后核心 -> 再蒙皮 -> 终紧固）；自动生成包含装配工序、所需工具、紧固件 BOM 清单与操作注意事项的标准作业指导书（`*_sop.html`）；输出由 `$t` 时间变量驱动的分段平滑爆炸与装配动画代码；Web 协同工作台与桌面端提供步进交互器与一键导出。
 - **拓扑轻量化与功能晶格微结构生成器 (`lattice.py`)**：在 CAD 几何与源码层直接生成航空级六边形蜂窝 (`honeycomb`)、正交加强筋格栅 (`orthogrid`)、三维八面体微桁架 (`diamond`) 与螺旋极小曲面 (`gyroid`) 晶格微结构；与装配实体求交截取并保留外部实体蒙皮，自带内部孔系布尔挖除；支持精确减重比例与材料克重节省推算（Weight Reduction % & Saved Grams），Web 协同工作台与桌面端均提供实时交互调参与一键轻量化重编译。
 - **多色多耗材 3MF 生产制造包与多喷头工具映射 (`multimaterial.py`)**：原生支持拓竹 Bambu Studio (AMS 4~16色)、OrcaSlicer、PrusaSlicer (MMU3/换刀机) 与双喷头 3D 打印；零外部重依赖纯原生生成符合 3MF Core & Material Extension 规范的标准工程包 (`*_multimaterial.3mf`)，自动将装配体各部件离散为独立 Mesh 构件，绑定 `<m:colorgroup>` 调色盘与颜色，并自动映射工具头编号（Extruder 1..N），切片软件直接识别为多构件装配，告别手动油漆桶分色。

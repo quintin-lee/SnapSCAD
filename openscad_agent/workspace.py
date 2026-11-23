@@ -284,6 +284,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-fea', this)">🌡️ 热力与公差</button>
       <button class="tab-btn" onclick="switchTab('tab-lattice', this)">🪶 减重晶格</button>
       <button class="tab-btn" onclick="switchTab('tab-sop', this)">🛠️ 装配工艺</button>
+      <button class="tab-btn" onclick="switchTab('tab-clash', this)">🔍 干涉检查</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -484,6 +485,28 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;">
         <button onclick="triggerExportSOP()" style="width:100%;background:#7c3aed;color:#ffffff;border:none;padding:8px;border-radius:6px;cursor:pointer;font-weight:600;">📋 导出标准作业指导书 (SOP HTML)</button>
       </div>
+    </div>
+
+    <!-- 真实物理碰撞与装配干涉校验面板 -->
+    <div id="tab-clash" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🔍 装配物理干涉体检 (Clash Doctor)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        通过三维 AABB/OBB 空间树与孔轴配合算法，排查构件体积硬干涉与负配合公差。
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">粘连临界阈值 (mm):</label>
+          <input type="number" id="clash-threshold" value="0.30" min="0.05" max="2.0" step="0.05" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+      </div>
+      <button onclick="triggerCheckInterference()" class="btn-accent" style="width:100%;margin-bottom:10px;background:#ea580c;">🔍 执行物理干涉校验</button>
+      <div id="clash-summary-box" style="display:none;background:var(--bg-card);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:10px;">
+        <div id="clash-summary-badge" style="font-weight:700;font-size:0.85rem;margin-bottom:4px;">-</div>
+        <div id="clash-summary-text" style="font-size:0.75rem;color:var(--text-muted);line-height:1.4;">-</div>
+      </div>
+      <div id="clash-list" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;"></div>
     </div>
   </div>
 
@@ -1680,6 +1703,67 @@ async function triggerExportSOP() {
   } catch (e) {
     alert('导出 SOP 异常: ' + e);
   }
+}
+
+async function triggerCheckInterference() {
+  const th = parseFloat(document.getElementById('clash-threshold').value) || 0.30;
+  const sBox = document.getElementById('clash-summary-box');
+  sBox.style.display = 'block';
+  document.getElementById('clash-summary-badge').innerText = '正在计算空间包围盒碰撞与配合公差...';
+  try {
+    const res = await fetch('/api/interference/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, clearance_threshold: th })
+    });
+    const data = await res.json();
+    if (data.success && data.report) {
+      renderClashResults(data.report);
+    } else {
+      alert('干涉检查失败: ' + (data.error || '未知错误'));
+    }
+  } catch (e) {
+    alert('干涉检查异常: ' + e);
+  }
+}
+
+function renderClashResults(report) {
+  const sBadge = document.getElementById('clash-summary-badge');
+  const sText = document.getElementById('clash-summary-text');
+  const listEl = document.getElementById('clash-list');
+  listEl.innerHTML = '';
+
+  if (report.is_assembly_valid && report.clearance_warnings_count === 0) {
+    sBadge.innerText = '✅ 完美配合 (100% CLEAN)';
+    sBadge.style.color = '#10b981';
+  } else if (report.hard_clashes_count > 0 || report.fit_interferences_count > 0) {
+    sBadge.innerText = `🔴 严重干涉 (${report.hard_clashes_count} 硬碰撞 / ${report.fit_interferences_count} 配合过盈)`;
+    sBadge.style.color = '#ef4444';
+  } else {
+    sBadge.innerText = `⚡ 间隙警戒 (${report.clearance_warnings_count} 处临界粘连预警)`;
+    sBadge.style.color = '#f59e0b';
+  }
+  sText.innerText = report.summary;
+
+  if (!report.clashes || report.clashes.length === 0) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:12px;">无干涉冲突记录。</div>';
+    return;
+  }
+
+  report.clashes.forEach(c => {
+    const card = document.createElement('div');
+    const colorBorder = c.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b';
+    card.style = `background:var(--bg-card);padding:8px 10px;border-radius:6px;border-left:4px solid ${colorBorder};border-top:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);font-size:0.8rem;`;
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <span style="font-weight:600;color:var(--text)">${c.part_a} ⚡ ${c.part_b}</span>
+        <span style="font-size:0.7rem;padding:2px 6px;border-radius:4px;background:rgba(0,0,0,0.2);color:${colorBorder};">${c.clash_type}</span>
+      </div>
+      <div style="color:var(--text);font-size:0.75rem;margin-bottom:4px;">${c.description}</div>
+      <div style="color:var(--text-muted);font-size:0.7rem;">💡 建议: ${c.resolution_advice}</div>
+    `;
+    listEl.appendChild(card);
+  });
 }
 
 async function triggerExportLib() {

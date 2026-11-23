@@ -211,6 +211,23 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
                     return
 
+            if rest.endswith("/interference"):
+                stem = rest.replace("/interference", "").strip()
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        from .interference import check_assembly_interference
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                        report = check_assembly_interference(spec)
+                        self.send_json(report.to_dict())
+                        return
+                    except Exception as e:
+                        self.send_json({"error": f"执行干涉检查失败: {e}"}, status=500)
+                        return
+                else:
+                    self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
+                    return
+
             stem = rest
             cand_spec = out_dir / f"{stem}_spec.json"
             cand_scad = out_dir / f"{stem}.scad"
@@ -645,6 +662,29 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        if clean_path == "/api/interference/check":
+            stem = body.get("stem", "")
+            if not stem:
+                self.send_json({"error": "缺少 stem 名称"}, status=400)
+                return
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                self.send_json({"error": f"未找到模型规格: {stem}_spec.json"}, status=404)
+                return
+            from .interference import check_assembly_interference
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                th = float(body.get("clearance_threshold", 0.30))
+                report = check_assembly_interference(spec, clearance_threshold_mm=th)
+                self.send_json({
+                    "success": True,
+                    "stem": stem,
+                    "report": report.to_dict(),
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -946,6 +986,36 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     "total_steps": plan.total_steps,
                     "plan": plan.to_dict(),
                 }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/model/{stem}/interference")
+        def get_model_interference(stem: str) -> dict[str, Any]:
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .interference import check_assembly_interference
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                report = check_assembly_interference(spec)
+                return report.to_dict()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/interference/check")
+        def interference_check_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            if not stem:
+                raise HTTPException(status_code=400, detail="缺少 stem")
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .interference import check_assembly_interference
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                th = float(body.get("clearance_threshold", 0.30))
+                report = check_assembly_interference(spec, clearance_threshold_mm=th)
+                return {"success": True, "stem": stem, "report": report.to_dict()}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
