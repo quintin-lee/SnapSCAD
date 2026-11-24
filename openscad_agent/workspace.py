@@ -287,6 +287,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-clash', this)">🔍 干涉检查</button>
       <button class="tab-btn" onclick="switchTab('tab-fasteners', this)">🔩 紧固件库</button>
       <button class="tab-btn" onclick="switchTab('tab-piping', this)">🚰 工业管路</button>
+      <button class="tab-btn" onclick="switchTab('tab-sheetmetal', this)">📐 钣金展开</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -625,6 +626,60 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       </div>
 
       <div id="pipe-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:220px;overflow-y:auto;font-size:0.75rem;"></div>
+    </div>
+
+    <!-- 钣金折弯与展开下料图 DXF/SVG 面板 -->
+    <div id="tab-sheetmetal" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>📐 钣金折弯与展开下料图 (Sheet Metal & Unfold)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        中性层 K 因子折弯补偿计算、三维折弯实体建模与激光切割 DXF / SVG 下料图直出。
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">构件预设:</label>
+          <select id="sm-preset" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="l_bracket">L 型直角安装支架</option>
+            <option value="u_channel" selected>U 型折弯槽架</option>
+            <option value="enclosure_tray">四周翻边机箱托盘</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">钣金材料 (K-Factor):</label>
+          <select id="sm-mat" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="ALUMINUM_5052" selected>5052 铝合金 (K=0.42)</option>
+            <option value="STEEL_SPCC">SPCC 冷轧钢 (K=0.44)</option>
+            <option value="STAINLESS_304">SUS304 不锈钢 (K=0.46)</option>
+            <option value="BRASS_H62">H62 黄铜 (K=0.40)</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">基宽 W(mm):</label>
+          <input type="number" id="sm-w" value="80" min="15" max="400" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">基高 H(mm):</label>
+          <input type="number" id="sm-h" value="60" min="15" max="400" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">翻边高 F(mm):</label>
+          <input type="number" id="sm-fl" value="25" min="5" max="150" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">板厚 T(mm):</label>
+          <input type="number" id="sm-t" value="1.5" min="0.5" max="8.0" step="0.5" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button onclick="triggerUnfoldSheetMetal()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;background:#0d9488;">📐 计算展开 & 载入 3D 源码</button>
+      </div>
+      <div id="sm-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:260px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -2121,6 +2176,63 @@ async function triggerGenerateManifold() {
   } catch (e) {
     box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
   }
+}
+
+window._lastSheetMetalData = null;
+
+async function triggerUnfoldSheetMetal() {
+  const preset = document.getElementById('sm-preset').value;
+  const mat = document.getElementById('sm-mat').value;
+  const w = parseFloat(document.getElementById('sm-w').value) || 80;
+  const h = parseFloat(document.getElementById('sm-h').value) || 60;
+  const fl = parseFloat(document.getElementById('sm-fl').value) || 25;
+  const t = parseFloat(document.getElementById('sm-t').value) || 1.5;
+  const box = document.getElementById('sm-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在计算 K 因子展开轮廓与 DXF/SVG 下料图...';
+
+  try {
+    const res = await fetch('/api/sheetmetal/unfold', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset: preset, material: mat, width: w, height: h, flange_len: fl, thickness: t })
+    });
+    const data = await res.json();
+    if (data.success && data.flat) {
+      window._lastSheetMetalData = data;
+      if (data.scad_3d) {
+        document.getElementById('scad-editor').value = data.scad_3d;
+      }
+      const f = data.flat;
+      box.innerHTML = `
+        <div style="color:#14b8a6;font-weight:600;margin-bottom:4px;">✅ 钣金展开计算完成 (3D 源码已载入编辑器)</div>
+        <div style="font-size:0.72rem;color:var(--text);margin-bottom:6px;">
+          • 展开毛坯总尺寸: <b>${f.flat_width} × ${f.flat_height} mm</b><br>
+          • 净下料面积: ${f.blank_area_mm2} mm² | 估算单件质量: <b>${f.estimated_mass_g} g</b><br>
+          • 折弯数量: ${f.bends_count} 处 | 孔数: ${f.holes_count} 孔 | K=${f.k_factor}
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <button onclick="downloadSheetMetalAsset('dxf')" class="btn-secondary" style="flex:1;padding:4px;font-size:0.7rem;">⬇️ 下载激光切割 DXF</button>
+          <button onclick="downloadSheetMetalAsset('svg')" class="btn-secondary" style="flex:1;padding:4px;font-size:0.7rem;">⬇️ 下载工程展开 SVG</button>
+        </div>
+        <div style="background:#f8fafc;border-radius:4px;padding:4px;overflow:hidden;">${data.svg || ''}</div>
+      `;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">展开计算失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
+  }
+}
+
+function downloadSheetMetalAsset(fmt) {
+  if (!window._lastSheetMetalData) return;
+  const content = fmt === 'dxf' ? window._lastSheetMetalData.dxf : window._lastSheetMetalData.svg;
+  const blob = new Blob([content], { type: fmt === 'dxf' ? 'application/dxf' : 'image/svg+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `sheetmetal_flat.${fmt}`;
+  a.click();
 }
 
 window.onload = function() {

@@ -174,6 +174,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2.3 钣金材料物性与 K 因子目录
+        if clean_path == "/api/sheetmetal/materials":
+            try:
+                from .sheetmetal import SHEET_METAL_MATERIALS
+                self.send_json({
+                    "success": True,
+                    "materials": SHEET_METAL_MATERIALS,
+                    "presets": ["l_bracket", "u_channel", "enclosure_tray"],
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -885,6 +898,44 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 钣金三维建模与二维无损展开下料 (DXF/SVG)
+        if clean_path == "/api/sheetmetal/unfold":
+            try:
+                from .sheetmetal import create_sheet_metal_preset, unfold_sheet_metal
+                if "preset" in body and "flanges" not in body:
+                    part = create_sheet_metal_preset(
+                        preset_name=str(body.get("preset", "u_channel")),
+                        width=float(body.get("width", body.get("base_width", 80.0))),
+                        height=float(body.get("height", body.get("base_height", 60.0))),
+                        flange_len=float(body.get("flange_len", 25.0)),
+                        thickness=float(body.get("thickness", 1.5)),
+                        material=str(body.get("material", "ALUMINUM_5052")),
+                    )
+                else:
+                    part = body
+                flat = unfold_sheet_metal(part)
+                resp: dict[str, Any] = {
+                    "success": True,
+                    "flat": flat.to_dict(),
+                    "scad_3d": flat.scad_3d,
+                    "dxf": flat.dxf_content,
+                    "svg": flat.svg_content,
+                }
+                stem = body.get("stem", "")
+                if stem and body.get("save", False):
+                    dxf_f = out_dir / f"{stem}_flat.dxf"
+                    svg_f = out_dir / f"{stem}_flat.svg"
+                    scad_f = out_dir / f"{stem}.scad"
+                    dxf_f.write_text(flat.dxf_content, encoding="utf-8")
+                    svg_f.write_text(flat.svg_content, encoding="utf-8")
+                    scad_f.write_text(flat.scad_3d, encoding="utf-8")
+                    resp["dxf_file"] = dxf_f.name
+                    resp["svg_file"] = svg_f.name
+                self.send_json(resp)
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1398,6 +1449,52 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                 m_holes = bool(body.get("mounting_holes", True))
                 scad = generate_manifold_block(port_count=p_cnt, main_port_d=m_d, branch_port_d=b_d, branch_spacing=spacing, mounting_holes=m_holes)
                 return {"success": True, "scad": scad, "port_count": p_cnt}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/sheetmetal/materials")
+        def get_sheetmetal_materials() -> dict[str, Any]:
+            from .sheetmetal import SHEET_METAL_MATERIALS
+            return {
+                "success": True,
+                "materials": SHEET_METAL_MATERIALS,
+                "presets": ["l_bracket", "u_channel", "enclosure_tray"],
+            }
+
+        @app.post("/api/sheetmetal/unfold")
+        def unfold_sheetmetal_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            try:
+                from .sheetmetal import create_sheet_metal_preset, unfold_sheet_metal
+                if "preset" in body and "flanges" not in body:
+                    part = create_sheet_metal_preset(
+                        preset_name=str(body.get("preset", "u_channel")),
+                        width=float(body.get("width", body.get("base_width", 80.0))),
+                        height=float(body.get("height", body.get("base_height", 60.0))),
+                        flange_len=float(body.get("flange_len", 25.0)),
+                        thickness=float(body.get("thickness", 1.5)),
+                        material=str(body.get("material", "ALUMINUM_5052")),
+                    )
+                else:
+                    part = body
+                flat = unfold_sheet_metal(part)
+                resp: dict[str, Any] = {
+                    "success": True,
+                    "flat": flat.to_dict(),
+                    "scad_3d": flat.scad_3d,
+                    "dxf": flat.dxf_content,
+                    "svg": flat.svg_content,
+                }
+                stem = body.get("stem", "")
+                if stem and body.get("save", False):
+                    dxf_f = out_dir / f"{stem}_flat.dxf"
+                    svg_f = out_dir / f"{stem}_flat.svg"
+                    scad_f = out_dir / f"{stem}.scad"
+                    dxf_f.write_text(flat.dxf_content, encoding="utf-8")
+                    svg_f.write_text(flat.svg_content, encoding="utf-8")
+                    scad_f.write_text(flat.scad_3d, encoding="utf-8")
+                    resp["dxf_file"] = dxf_f.name
+                    resp["svg_file"] = svg_f.name
+                return resp
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

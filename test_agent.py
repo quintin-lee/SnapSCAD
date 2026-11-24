@@ -1144,6 +1144,7 @@ def test_structural_stress_doctor_and_step_api():
     """测试 31: 机械结构力学应力集中深度分析与微服务 STEP 导出 API"""
     from openscad_agent.doctor import analyze_structural_stress, check_printability
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证紧固孔近壁剪切撕裂预警
@@ -1476,6 +1477,7 @@ def test_dimensioned_technical_blueprint_and_api():
     """测试 37: 工业级工程制图自动尺寸标注与矢量图纸引擎 (blueprint) 及微服务端点"""
     from openscad_agent.blueprint import generate_technical_blueprint
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     with tempfile.TemporaryDirectory() as td:
@@ -1661,6 +1663,7 @@ def test_thermal_warping_analysis_and_tolerance_compensation():
         compensate_and_recompile_model,
     )
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证热翘曲形变有限元评估 (PLA 低风险 vs 大跨度 ABS 高风险)
@@ -1752,6 +1755,7 @@ def test_multimaterial_3mf_export_and_slicing_metadata():
     """测试 40: 多色多耗材 3MF 生产切片工程文件导出 (Bambu/OrcaSlicer/Prusa MMU) 与多喷头工具映射"""
     from openscad_agent.multimaterial import export_multimaterial_3mf, parse_stl_to_mesh
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
     import zipfile
 
@@ -1863,8 +1867,10 @@ def test_cellular_lattice_and_lightweighting():
     from openscad_agent.geometry import spec_to_scad
     from openscad_agent.core import OpenscadRenderer, AgentConfig
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证各种晶格微结构生成器输出与减重估算
@@ -1963,6 +1969,7 @@ def test_assembly_sop_and_exploded_sequence():
         AssemblySequencePlan,
     )
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     spec_box = {
@@ -2051,6 +2058,7 @@ def test_physical_collision_and_interference_doctor():
         AABB3D,
     )
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证 AABB 几何包围盒与旋转映射
@@ -2179,6 +2187,7 @@ def test_standard_fasteners_and_counterbore_engine():
     )
     from openscad_agent.core import OpenscadRenderer, AgentConfig
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证标准紧固件数据库目录完整性 (M2 ~ M10)
@@ -2384,6 +2393,7 @@ def test_piping_and_fluid_manifold_engine():
     )
     from openscad_agent.core import OpenscadRenderer, AgentConfig
     from openscad_agent.server import serve_assets, stop_server
+    import math
     import requests
 
     # 1. 验证公称管径与气动管数据库完整性
@@ -2496,6 +2506,114 @@ def test_piping_and_fluid_manifold_engine():
             stop_server()
 
 
+def test_sheet_metal_bending_and_unfolding_engine():
+    """测试 46: 钣金折弯与展开下料图 DXF/SVG 引擎 (sheetmetal)"""
+    from openscad_agent.sheetmetal import (
+        SHEET_METAL_MATERIALS,
+        SheetHole,
+        FlangeSpec,
+        SheetMetalPart,
+        compute_bend_allowance,
+        compute_bend_deduction,
+        compute_outside_setback,
+        unfold_sheet_metal,
+        create_sheet_metal_preset,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import math
+    import requests
+
+    # 1. 验证 K 因子折弯力学公式精度 (T=2mm, R=2mm, 90deg, K=0.44)
+    ossb = compute_outside_setback(90.0, inner_radius=2.0, thickness=2.0)
+    assert abs(ossb - 4.0) < 1e-4
+    ba = compute_bend_allowance(90.0, inner_radius=2.0, thickness=2.0, k_factor=0.44)
+    expected_ba = math.pi / 2.0 * (2.0 + 0.44 * 2.0)
+    assert abs(ba - expected_ba) < 1e-4
+    bd = compute_bend_deduction(90.0, inner_radius=2.0, thickness=2.0, k_factor=0.44)
+    assert abs(bd - (8.0 - expected_ba)) < 1e-4
+
+    # 2. 验证 L 型支架精确展开尺寸: 60 + 40 - BD
+    l_part = SheetMetalPart(
+        name="L型精度验证件",
+        base_width=60.0,
+        base_height=40.0,
+        thickness=2.0,
+        material="STEEL_SPCC",
+        k_factor=0.44,
+        default_radius=2.0,
+        base_holes=[SheetHole(15.0, 20.0, 4.5, "M4")],
+        flanges=[FlangeSpec(edge="right", length=40.0, angle_deg=90.0, holes=[SheetHole(25.0, 20.0, 4.5, "M4")])],
+    )
+    flat_l = unfold_sheet_metal(l_part)
+    assert abs(flat_l.flat_width - (100.0 - bd)) < 1e-2
+    assert abs(flat_l.flat_height - 40.0) < 1e-4
+    assert len(flat_l.bend_lines) == 1
+    assert flat_l.bend_lines[0].direction == "UP"
+    assert len(flat_l.flat_holes) == 2
+
+    # 3. 验证 DXF (CUT & BEND 分层) 与 SVG 输出合法性
+    assert "CUT" in flat_l.dxf_content
+    assert "BEND" in flat_l.dxf_content
+    assert "CIRCLE" in flat_l.dxf_content
+    assert "LINE" in flat_l.dxf_content
+    assert "UP 90deg R2.0" in flat_l.dxf_content
+    assert "<svg" in flat_l.svg_content
+    assert "UP 90° R2.0" in flat_l.svg_content
+
+    # 4. 验证 U 型槽 & 四周翻边机箱托盘展开及三维 OpenSCAD CGAL 真实编译
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+    u_part = create_sheet_metal_preset("u_channel", width=80.0, height=50.0, flange_len=25.0, thickness=1.5)
+    flat_u = unfold_sheet_metal(u_part)
+    assert len(flat_u.bend_lines) == 2
+    assert flat_u.estimated_mass_g > 0
+
+    tray_part = create_sheet_metal_preset("enclosure_tray", width=70.0, height=50.0, flange_len=20.0, thickness=1.5)
+    flat_tray = unfold_sheet_metal(tray_part)
+    assert len(flat_tray.bend_lines) == 4
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+        scad_f = tmp_dir / "test_u_channel.scad"
+        scad_f.write_text(flat_u.scad_3d, encoding="utf-8")
+        out_stl = tmp_dir / "test_u_channel.stl"
+        renderer.export_model(scad_f, out_stl, force=True)
+        assert out_stl.exists()
+
+    # 5. 验证 REST API 端点 (/api/sheetmetal/materials, /api/sheetmetal/unfold)
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        _, _, port = serve_assets(work_dir, port=8995, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            r_mat = requests.get(f"{base}/api/sheetmetal/materials", timeout=5)
+            assert r_mat.status_code == 200
+            d_mat = r_mat.json()
+            assert d_mat["success"] is True
+            assert "ALUMINUM_5052" in d_mat["materials"]
+
+            r_unf = requests.post(f"{base}/api/sheetmetal/unfold", json={
+                "preset": "u_channel",
+                "material": "STEEL_SPCC",
+                "width": 90.0,
+                "height": 60.0,
+                "flange_len": 25.0,
+                "thickness": 2.0,
+                "stem": "test_bracket",
+                "save": True,
+            }, timeout=5)
+            assert r_unf.status_code == 200
+            d_unf = r_unf.json()
+            assert d_unf["success"] is True
+            assert d_unf["flat"]["bends_count"] == 2
+            assert (work_dir / "test_bracket_flat.dxf").exists()
+            assert (work_dir / "test_bracket_flat.svg").exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2548,6 +2666,7 @@ def run_all_tests() -> bool:
         ("真实物理碰撞检测与多构件装配干涉校验引擎 (interference)", test_physical_collision_and_interference_doctor),
         ("螺栓标准件智能紧固库与垫圈/沉头孔自动配准引擎 (fasteners)", test_standard_fasteners_and_counterbore_engine),
         ("工业管路与流体弯管/三通/法兰连接器生成引擎 (piping)", test_piping_and_fluid_manifold_engine),
+        ("钣金折弯与展开下料图 DXF/SVG 引擎 (sheetmetal)", test_sheet_metal_bending_and_unfolding_engine),
     ]
 
     all_ok = True

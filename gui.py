@@ -786,6 +786,10 @@ class MainWindow(QMainWindow):
         self.btn_piping.clicked.connect(self.on_open_piping_dialog)
         act_bar.addWidget(self.btn_piping)
 
+        self.btn_sheetmetal = QPushButton("📐 钣金展开")
+        self.btn_sheetmetal.clicked.connect(self.on_open_sheetmetal_dialog)
+        act_bar.addWidget(self.btn_sheetmetal)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1995,6 +1999,135 @@ class MainWindow(QMainWindow):
 
         d_lay.addLayout(btn_row)
 
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
+
+    def on_open_sheetmetal_dialog(self) -> None:
+        """打开钣金折弯三维建模与 DXF/SVG 展开下料配置对话框。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog
+        from openscad_agent.sheetmetal import (
+            SHEET_METAL_MATERIALS,
+            create_sheet_metal_preset,
+            unfold_sheet_metal,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("📐 钣金折弯与展开下料引擎 (K-Factor & DXF/SVG)")
+        dlg.resize(560, 520)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("构型预设:"), 0, 0)
+        cmb_preset = QComboBox()
+        cmb_preset.addItems(["U 型折弯槽架 (u_channel)", "L 型安装支架 (l_bracket)", "四周翻边托盘 (enclosure_tray)"])
+        form_lay.addWidget(cmb_preset, 0, 1)
+
+        form_lay.addWidget(QLabel("钣金材料:"), 1, 0)
+        cmb_mat = QComboBox()
+        mat_keys = list(SHEET_METAL_MATERIALS.keys())
+        cmb_mat.addItems([f"{k} - {SHEET_METAL_MATERIALS[k]['name']} (K={SHEET_METAL_MATERIALS[k]['k_factor']})" for k in mat_keys])
+        form_lay.addWidget(cmb_mat, 1, 1)
+
+        form_lay.addWidget(QLabel("基板宽 W (mm):"), 2, 0)
+        spn_w = QDoubleSpinBox()
+        spn_w.setRange(15.0, 500.0)
+        spn_w.setValue(80.0)
+        form_lay.addWidget(spn_w, 2, 1)
+
+        form_lay.addWidget(QLabel("基板高 H (mm):"), 3, 0)
+        spn_h = QDoubleSpinBox()
+        spn_h.setRange(15.0, 500.0)
+        spn_h.setValue(60.0)
+        form_lay.addWidget(spn_h, 3, 1)
+
+        form_lay.addWidget(QLabel("折弯翻边 F (mm):"), 4, 0)
+        spn_fl = QDoubleSpinBox()
+        spn_fl.setRange(5.0, 200.0)
+        spn_fl.setValue(25.0)
+        form_lay.addWidget(spn_fl, 4, 1)
+
+        form_lay.addWidget(QLabel("板材厚度 T (mm):"), 5, 0)
+        spn_t = QDoubleSpinBox()
+        spn_t.setRange(0.5, 10.0)
+        spn_t.setValue(1.5)
+        spn_t.setSingleStep(0.5)
+        form_lay.addWidget(spn_t, 5, 1)
+
+        d_lay.addLayout(form_lay)
+
+        lbl_summary = QLabel("展开计算结果将在此显示…")
+        lbl_summary.setStyleSheet("font-weight: 600; color: #0f766e; padding: 6px; background: #f0fdfa; border-radius: 4px;")
+        d_lay.addWidget(lbl_summary)
+
+        txt_preview = QTextEdit()
+        txt_preview.setFontFamily("Monospace")
+        txt_preview.setFontPointSize(9)
+        d_lay.addWidget(txt_preview)
+
+        state = {"flat": None}
+
+        def update_sheetmetal():
+            p_idx = cmb_preset.currentIndex()
+            preset_name = ["u_channel", "l_bracket", "enclosure_tray"][p_idx]
+            mat_key = mat_keys[cmb_mat.currentIndex()]
+            part = create_sheet_metal_preset(
+                preset_name=preset_name,
+                width=spn_w.value(),
+                height=spn_h.value(),
+                flange_len=spn_fl.value(),
+                thickness=spn_t.value(),
+                material=mat_key,
+            )
+            flat = unfold_sheet_metal(part)
+            state["flat"] = flat
+            lbl_summary.setText(
+                f"展开毛坯尺寸: {flat.flat_width:.2f} × {flat.flat_height:.2f} mm | "
+                f"面积: {flat.blank_area_mm2:.1f} mm² | 估算重量: {flat.estimated_mass_g:.1f} g | "
+                f"折弯数: {len(flat.bend_lines)}"
+            )
+            txt_preview.setText(flat.scad_3d)
+
+        for w_ctrl in (cmb_preset, cmb_mat):
+            w_ctrl.currentIndexChanged.connect(lambda _: update_sheetmetal())
+        for s_ctrl in (spn_w, spn_h, spn_fl, spn_t):
+            s_ctrl.valueChanged.connect(lambda _: update_sheetmetal())
+        update_sheetmetal()
+
+        btn_row = QHBoxLayout()
+        btn_save_dxf = QPushButton("💾 导出切割 DXF")
+        def save_dxf():
+            if not state["flat"]:
+                return
+            out_f, _ = QFileDialog.getSaveFileName(dlg, "导出激光切割 DXF 下料图", "sheetmetal_flat.dxf", "DXF Files (*.dxf)")
+            if out_f:
+                Path(out_f).write_text(state["flat"].dxf_content, encoding="utf-8")
+                QMessageBox.information(dlg, "导出成功", f"已导出分层 DXF 下料图 (含 CUT / BEND 图层):\n{out_f}")
+        btn_save_dxf.clicked.connect(save_dxf)
+        btn_row.addWidget(btn_save_dxf)
+
+        btn_save_svg = QPushButton("💾 导出展开 SVG")
+        def save_svg():
+            if not state["flat"]:
+                return
+            out_f, _ = QFileDialog.getSaveFileName(dlg, "导出矢量工程展开图 SVG", "sheetmetal_flat.svg", "SVG Files (*.svg)")
+            if out_f:
+                Path(out_f).write_text(state["flat"].svg_content, encoding="utf-8")
+                QMessageBox.information(dlg, "导出成功", f"已导出钣金展开工程图纸:\n{out_f}")
+        btn_save_svg.clicked.connect(save_svg)
+        btn_row.addWidget(btn_save_svg)
+
+        btn_load = QPushButton("📥 载入 3D 源码")
+        def load_3d():
+            if hasattr(self, "txt_scad") and state["flat"]:
+                self.txt_scad.setPlainText(state["flat"].scad_3d)
+                dlg.accept()
+                self.log("📥 钣金三维折弯源码已载入 OpenSCAD 编辑器")
+        btn_load.clicked.connect(load_3d)
+        btn_row.addWidget(btn_load)
+
+        d_lay.addLayout(btn_row)
         bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bbox.rejected.connect(dlg.reject)
         d_lay.addWidget(bbox)
