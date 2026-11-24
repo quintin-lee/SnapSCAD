@@ -65,6 +65,17 @@ from .fasteners import (
     generate_fasteners_bom,
     apply_auto_counterbores,
 )
+from .piping import (
+    PipeStandard,
+    PIPE_CATALOG,
+    generate_pipe_segment,
+    generate_pipe_elbow,
+    generate_tee_junction,
+    generate_y_splitter,
+    generate_pipe_flange,
+    generate_hose_barb,
+    generate_manifold_block,
+)
 
 __all__ = [
     "AgentConfig",
@@ -128,6 +139,15 @@ __all__ = [
     "match_fastener_for_hole",
     "generate_fasteners_bom",
     "apply_auto_counterbores",
+    "PipeStandard",
+    "PIPE_CATALOG",
+    "generate_pipe_segment",
+    "generate_pipe_elbow",
+    "generate_tee_junction",
+    "generate_y_splitter",
+    "generate_pipe_flange",
+    "generate_hose_barb",
+    "generate_manifold_block",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

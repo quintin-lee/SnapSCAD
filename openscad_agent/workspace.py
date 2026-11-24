@@ -286,6 +286,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-sop', this)">🛠️ 装配工艺</button>
       <button class="tab-btn" onclick="switchTab('tab-clash', this)">🔍 干涉检查</button>
       <button class="tab-btn" onclick="switchTab('tab-fasteners', this)">🔩 紧固件库</button>
+      <button class="tab-btn" onclick="switchTab('tab-piping', this)">🚰 工业管路</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -569,6 +570,61 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       </div>
 
       <div id="fastener-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:220px;overflow-y:auto;font-size:0.75rem;"></div>
+    </div>
+
+    <!-- 工业管路与流体弯管/三通/法兰连接器面板 -->
+    <div id="tab-piping" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🚰 工业流体管路与连接件 (Piping & Manifolds)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        公称管径 DN6~DN25、光滑圆弧弯管、连通三通、标准密封法兰与宝塔接头。
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">管件构型:</label>
+          <select id="pipe-type" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="straight">直管段 (Straight Pipe)</option>
+            <option value="elbow" selected>光滑弯管 (Elbow)</option>
+            <option value="tee">正交三通 (Tee Junction)</option>
+            <option value="y_splitter">Y 型分流管 (Y-Splitter)</option>
+            <option value="flange">管道法兰盘 (Flange)</option>
+            <option value="barb">宝塔软管接头 (Hose Barb)</option>
+          </select>
+        </div>
+        <div style="width:90px;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">公称规格:</label>
+          <select id="pipe-dn" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="DN6">DN6 (10.2/7.0)</option>
+            <option value="DN8">DN8 (13.5/9.5)</option>
+            <option value="DN10">DN10 (17.2/13.2)</option>
+            <option value="DN15" selected>DN15 (21.3/17.3)</option>
+            <option value="DN20">DN20 (26.9/22.3)</option>
+            <option value="DN25">DN25 (33.7/28.5)</option>
+            <option value="PU_6x4">PU 6x4 气动管</option>
+            <option value="PU_8x5">PU 8x5 气动管</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">外径 OD / 角度 (°):</label>
+          <input type="number" id="pipe-val1" value="90" min="5" max="180" step="5" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">长度 / 半径 R (mm):</label>
+          <input type="number" id="pipe-val2" value="30" min="5" max="200" step="1" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button onclick="triggerGeneratePiping()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;background:#0284c7;">⚡ 生成管路构件源码</button>
+        <button onclick="triggerGenerateManifold()" class="btn-secondary" style="flex:1;padding:6px;font-size:0.75rem;border-color:#0284c7;color:#38bdf8;">🔀 生成多路歧管块</button>
+      </div>
+
+      <div id="pipe-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:220px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -1986,6 +2042,84 @@ async function triggerFastenersBOM() {
     }
   } catch (e) {
     box.innerHTML = `<div style="color:#ef4444;">获取 BOM 异常: ${e}</div>`;
+  }
+}
+
+async function triggerGeneratePiping() {
+  const pType = document.getElementById('pipe-type').value;
+  const dn = document.getElementById('pipe-dn').value;
+  const val1 = parseFloat(document.getElementById('pipe-val1').value) || 90;
+  const val2 = parseFloat(document.getElementById('pipe-val2').value) || 30;
+  const box = document.getElementById('pipe-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在生成管路构件源码...';
+
+  const bodyData = { pipe_type: pType, dn: dn };
+  if (pType === 'elbow') {
+    bodyData.bend_angle = val1;
+    bodyData.bend_radius = val2;
+  } else if (pType === 'tee') {
+    bodyData.angle = val1;
+    bodyData.main_len = val2 * 2;
+    bodyData.branch_len = val2;
+  } else if (pType === 'y_splitter') {
+    bodyData.split_angle = val1;
+    bodyData.branch_len = val2;
+  } else if (pType === 'flange') {
+    bodyData.thickness = val1 > 20 ? 8 : val1;
+  } else if (pType === 'barb') {
+    bodyData.hose_id = val2;
+  } else {
+    bodyData.length = val2 * 2;
+  }
+
+  try {
+    const res = await fetch('/api/piping/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyData)
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      document.getElementById('scad-editor').value = data.scad;
+      box.innerHTML = `
+        <div style="color:#38bdf8;font-weight:600;margin-bottom:4px;">✅ 管路源码已载入编辑器</div>
+        <div style="color:var(--text-muted);font-size:0.7rem;">可直接在 [SCAD 源码] 标签中执行求值渲染或导出 STL。</div>
+      `;
+      switchTab('tab-editor', document.querySelector('.tab-btn'));
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">网络异常: ${e}</div>`;
+  }
+}
+
+async function triggerGenerateManifold() {
+  const dn = document.getElementById('pipe-dn').value;
+  const box = document.getElementById('pipe-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在生成多通道流体分配歧管块...';
+
+  try {
+    const res = await fetch('/api/piping/manifold', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port_count: 4, main_port_d: 17.2, branch_port_d: 9.5, branch_spacing: 24.0 })
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      document.getElementById('scad-editor').value = data.scad;
+      box.innerHTML = `
+        <div style="color:#38bdf8;font-weight:600;margin-bottom:4px;">✅ 4路分配歧管块已生成并载入</div>
+        <div style="color:var(--text-muted);font-size:0.7rem;">含主供介质轴向腔道与两端 M4 安装固定通孔。</div>
+      `;
+      switchTab('tab-editor', document.querySelector('.tab-btn'));
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成歧管失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
   }
 }
 

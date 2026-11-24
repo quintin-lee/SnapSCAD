@@ -161,6 +161,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2.2 工业管路规格库目录
+        if clean_path == "/api/piping/catalog":
+            try:
+                from .piping import PIPE_CATALOG, PipeStandard
+                self.send_json({
+                    "success": True,
+                    "catalog": PIPE_CATALOG,
+                    "standards": [e.value for e in PipeStandard],
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -803,6 +816,75 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 工业管路与连接件代码在线生成
+        if clean_path == "/api/piping/generate":
+            pipe_type = str(body.get("pipe_type", "straight")).lower()
+            dn = body.get("dn")
+            od = float(body.get("od", 21.3))
+            id_ = float(body.get("id", 17.3))
+            try:
+                from .piping import (
+                    generate_pipe_segment,
+                    generate_pipe_elbow,
+                    generate_tee_junction,
+                    generate_y_splitter,
+                    generate_pipe_flange,
+                    generate_hose_barb,
+                )
+                if "elbow" in pipe_type or "bend" in pipe_type:
+                    ang = float(body.get("bend_angle", 90.0))
+                    rad = float(body.get("bend_radius", 30.0))
+                    t_len = float(body.get("tangent_length", 10.0))
+                    scad = generate_pipe_elbow(bend_angle=ang, bend_radius=rad, od=od, id=id_, dn=dn, tangent_length=t_len)
+                elif "tee" in pipe_type:
+                    m_len = float(body.get("main_len", 70.0))
+                    b_od = float(body["branch_od"]) if "branch_od" in body else None
+                    b_id = float(body["branch_id"]) if "branch_id" in body else None
+                    b_len = float(body.get("branch_len", 35.0))
+                    ang = float(body.get("angle", 90.0))
+                    scad = generate_tee_junction(main_od=od, main_id=id_, main_len=m_len, branch_od=b_od, branch_id=b_id, branch_len=b_len, angle=ang)
+                elif "y" in pipe_type or "splitter" in pipe_type:
+                    b_od = float(body["branch_od"]) if "branch_od" in body else None
+                    b_id = float(body["branch_id"]) if "branch_id" in body else None
+                    s_ang = float(body.get("split_angle", 60.0))
+                    m_len = float(body.get("main_len", 25.0))
+                    b_len = float(body.get("branch_len", 40.0))
+                    scad = generate_y_splitter(main_od=od, main_id=id_, branch_od=b_od, branch_id=b_id, split_angle=s_ang, main_len=m_len, branch_len=b_len)
+                elif "flange" in pipe_type:
+                    f_od = float(body["flange_od"]) if "flange_od" in body else None
+                    th = float(body.get("thickness", 8.0))
+                    pcd = float(body["pcd"]) if "pcd" in body else None
+                    b_sz = str(body.get("bolt_size", "M4"))
+                    b_cnt = int(body.get("bolt_count", 4))
+                    o_ring = bool(body.get("o_ring_groove", True))
+                    scad = generate_pipe_flange(pipe_od=od, pipe_id=id_, flange_od=f_od, thickness=th, pcd=pcd, bolt_size=b_sz, bolt_count=b_cnt, o_ring_groove=o_ring)
+                elif "barb" in pipe_type or "hose" in pipe_type:
+                    h_id = float(body.get("hose_id", 6.0))
+                    cnt = int(body.get("barb_count", 3))
+                    scad = generate_hose_barb(hose_id=h_id, barb_count=cnt)
+                else:
+                    length = float(body.get("length", 60.0))
+                    scad = generate_pipe_segment(od=od, id=id_, length=length, dn=dn)
+                self.send_json({"success": True, "scad": scad, "pipe_type": pipe_type})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # 多通道流体分配歧管块在线生成
+        if clean_path == "/api/piping/manifold":
+            try:
+                from .piping import generate_manifold_block
+                p_cnt = int(body.get("port_count", 4))
+                m_d = float(body.get("main_port_d", 17.2))
+                b_d = float(body.get("branch_port_d", 9.5))
+                spacing = float(body.get("branch_spacing", 24.0))
+                m_holes = bool(body.get("mounting_holes", True))
+                scad = generate_manifold_block(port_count=p_cnt, main_port_d=m_d, branch_port_d=b_d, branch_spacing=spacing, mounting_holes=m_holes)
+                self.send_json({"success": True, "scad": scad, "port_count": p_cnt})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1240,6 +1322,82 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     "scad": new_scad,
                     "bom": bom,
                 }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/piping/catalog")
+        def get_piping_catalog() -> dict[str, Any]:
+            from .piping import PIPE_CATALOG, PipeStandard
+            return {
+                "success": True,
+                "catalog": PIPE_CATALOG,
+                "standards": [e.value for e in PipeStandard],
+            }
+
+        @app.post("/api/piping/generate")
+        def generate_piping_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            pipe_type = str(body.get("pipe_type", "straight")).lower()
+            dn = body.get("dn")
+            od = float(body.get("od", 21.3))
+            id_ = float(body.get("id", 17.3))
+            try:
+                from .piping import (
+                    generate_pipe_segment,
+                    generate_pipe_elbow,
+                    generate_tee_junction,
+                    generate_y_splitter,
+                    generate_pipe_flange,
+                    generate_hose_barb,
+                )
+                if "elbow" in pipe_type or "bend" in pipe_type:
+                    ang = float(body.get("bend_angle", 90.0))
+                    rad = float(body.get("bend_radius", 30.0))
+                    t_len = float(body.get("tangent_length", 10.0))
+                    scad = generate_pipe_elbow(bend_angle=ang, bend_radius=rad, od=od, id=id_, dn=dn, tangent_length=t_len)
+                elif "tee" in pipe_type:
+                    m_len = float(body.get("main_len", 70.0))
+                    b_od = float(body["branch_od"]) if "branch_od" in body else None
+                    b_id = float(body["branch_id"]) if "branch_id" in body else None
+                    b_len = float(body.get("branch_len", 35.0))
+                    ang = float(body.get("angle", 90.0))
+                    scad = generate_tee_junction(main_od=od, main_id=id_, main_len=m_len, branch_od=b_od, branch_id=b_id, branch_len=b_len, angle=ang)
+                elif "y" in pipe_type or "splitter" in pipe_type:
+                    b_od = float(body["branch_od"]) if "branch_od" in body else None
+                    b_id = float(body["branch_id"]) if "branch_id" in body else None
+                    s_ang = float(body.get("split_angle", 60.0))
+                    m_len = float(body.get("main_len", 25.0))
+                    b_len = float(body.get("branch_len", 40.0))
+                    scad = generate_y_splitter(main_od=od, main_id=id_, branch_od=b_od, branch_id=b_id, split_angle=s_ang, main_len=m_len, branch_len=b_len)
+                elif "flange" in pipe_type:
+                    f_od = float(body["flange_od"]) if "flange_od" in body else None
+                    th = float(body.get("thickness", 8.0))
+                    pcd = float(body["pcd"]) if "pcd" in body else None
+                    b_sz = str(body.get("bolt_size", "M4"))
+                    b_cnt = int(body.get("bolt_count", 4))
+                    o_ring = bool(body.get("o_ring_groove", True))
+                    scad = generate_pipe_flange(pipe_od=od, pipe_id=id_, flange_od=f_od, thickness=th, pcd=pcd, bolt_size=b_sz, bolt_count=b_cnt, o_ring_groove=o_ring)
+                elif "barb" in pipe_type or "hose" in pipe_type:
+                    h_id = float(body.get("hose_id", 6.0))
+                    cnt = int(body.get("barb_count", 3))
+                    scad = generate_hose_barb(hose_id=h_id, barb_count=cnt)
+                else:
+                    length = float(body.get("length", 60.0))
+                    scad = generate_pipe_segment(od=od, id=id_, length=length, dn=dn)
+                return {"success": True, "scad": scad, "pipe_type": pipe_type}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/piping/manifold")
+        def generate_manifold_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            try:
+                from .piping import generate_manifold_block
+                p_cnt = int(body.get("port_count", 4))
+                m_d = float(body.get("main_port_d", 17.2))
+                b_d = float(body.get("branch_port_d", 9.5))
+                spacing = float(body.get("branch_spacing", 24.0))
+                m_holes = bool(body.get("mounting_holes", True))
+                scad = generate_manifold_block(port_count=p_cnt, main_port_d=m_d, branch_port_d=b_d, branch_spacing=spacing, mounting_holes=m_holes)
+                return {"success": True, "scad": scad, "port_count": p_cnt}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

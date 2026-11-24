@@ -782,6 +782,10 @@ class MainWindow(QMainWindow):
         self.btn_fasteners.clicked.connect(self.on_open_fasteners_dialog)
         act_bar.addWidget(self.btn_fasteners)
 
+        self.btn_piping = QPushButton("🚰 工业管路")
+        self.btn_piping.clicked.connect(self.on_open_piping_dialog)
+        act_bar.addWidget(self.btn_piping)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -1871,6 +1875,123 @@ class MainWindow(QMainWindow):
                 self.log("📥 紧固件实体代码已载入 OpenSCAD 源码编辑器")
         btn_load_editor.clicked.connect(load_to_editor)
         btn_row.addWidget(btn_load_editor)
+
+        d_lay.addLayout(btn_row)
+
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
+
+    def on_open_piping_dialog(self) -> None:
+        """打开工业管路、弯头、三通、法兰与宝塔接头配置对话框。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+        from openscad_agent.piping import (
+            PIPE_CATALOG,
+            generate_pipe_segment,
+            generate_pipe_elbow,
+            generate_tee_junction,
+            generate_y_splitter,
+            generate_pipe_flange,
+            generate_hose_barb,
+            generate_manifold_block,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🚰 工业流体管路与连接件库 (Piping & Manifolds)")
+        dlg.resize(540, 500)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("管件构型:"), 0, 0)
+        cmb_type = QComboBox()
+        cmb_type.addItems([
+            "光滑圆弧弯管 (Elbow)",
+            "工业直管段 (Straight Pipe)",
+            "正交连通三通 (Tee Junction)",
+            "Y 型分流管 (Y-Splitter)",
+            "管道法兰盘 (Flange)",
+            "宝塔软管接头 (Hose Barb)",
+            "多通道歧管块 (Manifold Block)",
+        ])
+        form_lay.addWidget(cmb_type, 0, 1)
+
+        form_lay.addWidget(QLabel("公称规格 (DN/PU):"), 1, 0)
+        cmb_dn = QComboBox()
+        cmb_dn.addItems(["DN6", "DN8", "DN10", "DN15", "DN20", "DN25", "PU_6x4", "PU_8x5"])
+        cmb_dn.setCurrentText("DN15")
+        form_lay.addWidget(cmb_dn, 1, 1)
+
+        form_lay.addWidget(QLabel("弯曲角度 / 数量:"), 2, 0)
+        spn_ang = QDoubleSpinBox()
+        spn_ang.setRange(5.0, 180.0)
+        spn_ang.setValue(90.0)
+        spn_ang.setSingleStep(5.0)
+        form_lay.addWidget(spn_ang, 2, 1)
+
+        form_lay.addWidget(QLabel("长度 / 半径 R (mm):"), 3, 0)
+        spn_rad = QDoubleSpinBox()
+        spn_rad.setRange(5.0, 200.0)
+        spn_rad.setValue(30.0)
+        spn_rad.setSingleStep(5.0)
+        form_lay.addWidget(spn_rad, 3, 1)
+
+        d_lay.addLayout(form_lay)
+
+        txt_preview = QTextEdit()
+        txt_preview.setPlaceholderText("// 工业管路 OpenSCAD 几何源码预览…")
+        txt_preview.setFontFamily("Monospace")
+        txt_preview.setFontPointSize(9)
+        d_lay.addWidget(txt_preview)
+
+        def update_preview():
+            t_idx = cmb_type.currentIndex()
+            dn = cmb_dn.currentText()
+            ang = spn_ang.value()
+            rad = spn_rad.value()
+            info = PIPE_CATALOG.get(dn, PIPE_CATALOG["DN15"])
+            od = info["od"]
+            id_ = info["id"]
+            if t_idx == 0:
+                code = generate_pipe_elbow(bend_angle=ang, bend_radius=rad, od=od, id=id_, dn=dn)
+            elif t_idx == 1:
+                code = generate_pipe_segment(od=od, id=id_, length=rad * 2.0, dn=dn)
+            elif t_idx == 2:
+                code = generate_tee_junction(main_od=od, main_id=id_, main_len=rad * 2.5, branch_len=rad, angle=ang)
+            elif t_idx == 3:
+                code = generate_y_splitter(main_od=od, main_id=id_, split_angle=ang, branch_len=rad)
+            elif t_idx == 4:
+                code = generate_pipe_flange(pipe_od=od, pipe_id=id_, thickness=8.0, o_ring_groove=True)
+            elif t_idx == 5:
+                code = generate_hose_barb(hose_id=id_, barb_count=3)
+            elif t_idx == 6:
+                code = generate_manifold_block(port_count=int(ang) if ang <= 12 else 4)
+            else:
+                code = generate_pipe_segment(od=od, id=id_, length=rad)
+            txt_preview.setText(code)
+
+        cmb_type.currentIndexChanged.connect(lambda _: update_preview())
+        cmb_dn.currentIndexChanged.connect(lambda _: update_preview())
+        spn_ang.valueChanged.connect(lambda _: update_preview())
+        spn_rad.valueChanged.connect(lambda _: update_preview())
+        update_preview()
+
+        btn_row = QHBoxLayout()
+        btn_load_editor = QPushButton("📥 载入至源码区")
+        def load_to_editor():
+            if hasattr(self, "txt_scad"):
+                self.txt_scad.setPlainText(txt_preview.toPlainText())
+                dlg.accept()
+                self.log("📥 工业管路代码已载入 OpenSCAD 源码编辑器")
+        btn_load_editor.clicked.connect(load_to_editor)
+        btn_row.addWidget(btn_load_editor)
+
+        btn_copy = QPushButton("📋 复制源码")
+        def copy_code():
+            QApplication.clipboard().setText(txt_preview.toPlainText())
+            QMessageBox.information(dlg, "已复制", "管路 OpenSCAD 代码已成功复制到剪贴板！")
+        btn_copy.clicked.connect(copy_code)
+        btn_row.addWidget(btn_copy)
 
         d_lay.addLayout(btn_row)
 

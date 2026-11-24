@@ -2369,6 +2369,133 @@ difference() {{
             stop_server()
 
 
+def test_piping_and_fluid_manifold_engine():
+    """测试 45: 工业管路与流体弯管/三通/法兰连接器生成引擎 (piping)"""
+    from openscad_agent.piping import (
+        PipeStandard,
+        PIPE_CATALOG,
+        generate_pipe_segment,
+        generate_pipe_elbow,
+        generate_tee_junction,
+        generate_y_splitter,
+        generate_pipe_flange,
+        generate_hose_barb,
+        generate_manifold_block,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证公称管径与气动管数据库完整性
+    for dn in ["DN6", "DN8", "DN10", "DN15", "DN20", "DN25", "PU_6x4", "PU_8x5"]:
+        assert dn in PIPE_CATALOG
+        entry = PIPE_CATALOG[dn]
+        assert "od" in entry
+        assert "id" in entry
+        assert "wall" in entry
+
+    # 2. 验证各类管路原语几何生成与真实 OpenSCAD CGAL 编译
+    cfg = AgentConfig()
+    renderer = OpenscadRenderer(cfg)
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+
+        # 2.1 直管段 (Straight Pipe)
+        str_scad = generate_pipe_segment(dn="DN15", length=50.0)
+        assert "OD=21.30mm" in str_scad
+        assert "ID=17.30mm" in str_scad
+        f_str = tmp_dir / "test_pipe.scad"
+        f_str.write_text(str_scad, encoding="utf-8")
+        out_str_stl = tmp_dir / "test_pipe.stl"
+        renderer.export_model(f_str, out_str_stl, force=True)
+        assert out_str_stl.exists()
+
+        # 2.2 光滑圆弧弯管 (Elbow rotate_extrude)
+        elbow_scad = generate_pipe_elbow(bend_angle=90.0, bend_radius=25.0, dn="DN15", tangent_length=8.0)
+        assert "rotate_extrude(angle = 90.00" in elbow_scad
+        assert "circle(d = 21.30)" in elbow_scad
+        f_elbow = tmp_dir / "test_elbow.scad"
+        f_elbow.write_text(elbow_scad, encoding="utf-8")
+        out_elbow_stl = tmp_dir / "test_elbow.stl"
+        renderer.export_model(f_elbow, out_elbow_stl, force=True)
+        assert out_elbow_stl.exists()
+
+        # 2.3 正交连通三通 (Tee Junction)
+        tee_scad = generate_tee_junction(main_od=21.3, main_id=17.3, main_len=60.0, branch_len=30.0)
+        assert "Tee Junction" in tee_scad
+        assert "rotate([0, 90.00, 0])" in tee_scad
+        f_tee = tmp_dir / "test_tee.scad"
+        f_tee.write_text(tee_scad, encoding="utf-8")
+        out_tee_stl = tmp_dir / "test_tee.stl"
+        renderer.export_model(f_tee, out_tee_stl, force=True)
+        assert out_tee_stl.exists()
+
+        # 2.4 Y 型分流管 (Y-Splitter)
+        y_scad = generate_y_splitter(main_od=21.3, main_id=17.3, split_angle=60.0)
+        assert "Y-Splitter" in y_scad
+        assert "rotate([0, -30.00, 0])" in y_scad
+        assert "rotate([0, 30.00, 0])" in y_scad
+
+        # 2.5 标准管道法兰盘 (Flange with Bolt Circle PCD & O-Ring groove)
+        flange_scad = generate_pipe_flange(pipe_od=21.3, pipe_id=17.3, flange_od=50.0, thickness=8.0, bolt_count=4, o_ring_groove=True)
+        assert "PCD=" in flange_scad
+        assert "O 型密封圈" in flange_scad
+
+        # 2.6 防脱宝塔气管接头 (Hose Barb)
+        barb_scad = generate_hose_barb(hose_id=6.0, barb_count=3)
+        assert "Hose Barb" in barb_scad
+        assert "cylinder(r =" in barb_scad
+
+        # 2.7 多通道流体分配歧管块 (Manifold Block)
+        manifold_scad = generate_manifold_block(port_count=4, main_port_d=17.2, branch_port_d=9.5, branch_spacing=24.0)
+        assert "Manifold Block: 4 路输出" in manifold_scad
+        assert "cube([" in manifold_scad
+
+    # 3. 验证 REST API 微服务端点
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        _, _, port = serve_assets(work_dir, port=8993, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+
+        try:
+            # 3.1 GET /api/piping/catalog
+            r_cat = requests.get(f"{base}/api/piping/catalog", timeout=5)
+            assert r_cat.status_code == 200
+            d_cat = r_cat.json()
+            assert d_cat["success"] is True
+            assert "DN15" in d_cat["catalog"]
+            assert "PU_6x4" in d_cat["catalog"]
+
+            # 3.2 POST /api/piping/generate (Elbow)
+            r_gen = requests.post(f"{base}/api/piping/generate", json={
+                "pipe_type": "elbow",
+                "dn": "DN15",
+                "bend_angle": 90.0,
+                "bend_radius": 28.0,
+            }, timeout=5)
+            assert r_gen.status_code == 200
+            d_gen = r_gen.json()
+            assert d_gen["success"] is True
+            assert "rotate_extrude" in d_gen["scad"]
+
+            # 3.3 POST /api/piping/manifold
+            r_man = requests.post(f"{base}/api/piping/manifold", json={
+                "port_count": 4,
+                "main_port_d": 17.2,
+                "branch_port_d": 9.5,
+                "branch_spacing": 22.0,
+            }, timeout=5)
+            assert r_man.status_code == 200
+            d_man = r_man.json()
+            assert d_man["success"] is True
+            assert d_man["port_count"] == 4
+            assert "Manifold Block" in d_man["scad"]
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2420,6 +2547,7 @@ def run_all_tests() -> bool:
         ("工业级装配体拆解路径推导与 3D 装配工艺流程引擎 (assembly_sop)", test_assembly_sop_and_exploded_sequence),
         ("真实物理碰撞检测与多构件装配干涉校验引擎 (interference)", test_physical_collision_and_interference_doctor),
         ("螺栓标准件智能紧固库与垫圈/沉头孔自动配准引擎 (fasteners)", test_standard_fasteners_and_counterbore_engine),
+        ("工业管路与流体弯管/三通/法兰连接器生成引擎 (piping)", test_piping_and_fluid_manifold_engine),
     ]
 
     all_ok = True
