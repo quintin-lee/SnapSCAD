@@ -187,6 +187,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2.4 电子外壳 PCB 模板与 I/O 开孔标准库
+        if clean_path == "/api/enclosure/templates":
+            try:
+                from .enclosure import PCB_TEMPLATES, IO_PORT_PROFILES
+                self.send_json({
+                    "success": True,
+                    "templates": PCB_TEMPLATES,
+                    "io_ports": IO_PORT_PROFILES,
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -936,6 +949,26 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 智能电子外壳 PCB 导柱/散热格栅与 I/O 开窗生成
+        if clean_path == "/api/enclosure/generate":
+            try:
+                from .enclosure import generate_enclosure_scad
+                scad_code, rep = generate_enclosure_scad(body)
+                resp: dict[str, Any] = {
+                    "success": True,
+                    "scad": scad_code,
+                    "report": rep,
+                }
+                stem = body.get("stem", "")
+                if stem and body.get("save", False):
+                    scad_f = out_dir / f"{stem}.scad"
+                    scad_f.write_text(scad_code, encoding="utf-8")
+                    resp["scad_file"] = scad_f.name
+                self.send_json(resp)
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1494,6 +1527,34 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     scad_f.write_text(flat.scad_3d, encoding="utf-8")
                     resp["dxf_file"] = dxf_f.name
                     resp["svg_file"] = svg_f.name
+                return resp
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/enclosure/templates")
+        def get_enclosure_templates() -> dict[str, Any]:
+            from .enclosure import PCB_TEMPLATES, IO_PORT_PROFILES
+            return {
+                "success": True,
+                "templates": PCB_TEMPLATES,
+                "io_ports": IO_PORT_PROFILES,
+            }
+
+        @app.post("/api/enclosure/generate")
+        def generate_enclosure_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            try:
+                from .enclosure import generate_enclosure_scad
+                scad_code, rep = generate_enclosure_scad(body)
+                resp: dict[str, Any] = {
+                    "success": True,
+                    "scad": scad_code,
+                    "report": rep,
+                }
+                stem = body.get("stem", "")
+                if stem and body.get("save", False):
+                    scad_f = out_dir / f"{stem}.scad"
+                    scad_f.write_text(scad_code, encoding="utf-8")
+                    resp["scad_file"] = scad_f.name
                 return resp
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))

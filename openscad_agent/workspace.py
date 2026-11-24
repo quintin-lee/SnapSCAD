@@ -288,6 +288,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-fasteners', this)">🔩 紧固件库</button>
       <button class="tab-btn" onclick="switchTab('tab-piping', this)">🚰 工业管路</button>
       <button class="tab-btn" onclick="switchTab('tab-sheetmetal', this)">📐 钣金展开</button>
+      <button class="tab-btn" onclick="switchTab('tab-enclosure', this)">🖥️ 电子外壳</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -680,6 +681,55 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
         <button onclick="triggerUnfoldSheetMetal()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;background:#0d9488;">📐 计算展开 & 载入 3D 源码</button>
       </div>
       <div id="sm-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:260px;overflow-y:auto;font-size:0.75rem;"></div>
+    </div>
+
+    <!-- 智能电子外壳 PCB 导柱与散热开槽面板 -->
+    <div id="tab-enclosure" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🖥️ 电子外壳与 PCB 智能匹配引擎 (Enclosure)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        一键生成适配主流开发板的双件式外壳（含强化导柱、热熔嵌件孔、I/O 侧墙开窗与顶盖散热格栅）。
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">PCB 开发板模板:</label>
+        <select id="enc-template" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+          <option value="RASPBERRY_PI_4B" selected>Raspberry Pi 4B / 5 (85×56mm, 7处I/O)</option>
+          <option value="ARDUINO_UNO">Arduino Uno R3/R4 (68.6×53.3mm)</option>
+          <option value="ESP32_DEVKIT">ESP32 DevKit / S3 (55×28mm)</option>
+          <option value="JETSON_ORIN_NANO">Jetson Orin Nano 载板 (100×79mm)</option>
+          <option value="CUSTOM_GENERIC">自定义通用开发板 (70×50mm)</option>
+        </select>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">散热格栅样式:</label>
+          <select id="enc-vent" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="linear_slots" selected>条形对流百叶槽</option>
+            <option value="honeycomb">六边形蜂窝散热孔</option>
+            <option value="circular_grid">圆形点阵散热孔</option>
+            <option value="none">全封闭无开孔</option>
+          </select>
+        </div>
+        <div style="width:85px;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">壁厚 (mm):</label>
+          <input type="number" id="enc-wall" value="2.4" min="1.2" max="5.0" step="0.2" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:12px;margin-bottom:8px;font-size:0.75rem;color:var(--text);">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="enc-lid" checked> 生成合盖顶盖
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="enc-split" checked> 平铺单板打印排版
+        </label>
+      </div>
+
+      <button onclick="triggerGenerateEnclosure()" class="btn-accent" style="width:100%;margin-bottom:8px;background:#6366f1;">⚡ 生成双件式电子外壳源码</button>
+      <div id="enc-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:200px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -2233,6 +2283,50 @@ function downloadSheetMetalAsset(fmt) {
   a.href = URL.createObjectURL(blob);
   a.download = `sheetmetal_flat.${fmt}`;
   a.click();
+}
+
+async function triggerGenerateEnclosure() {
+  const tmpl = document.getElementById('enc-template').value;
+  const vent = document.getElementById('enc-vent').value;
+  const wall = parseFloat(document.getElementById('enc-wall').value) || 2.4;
+  const lid = document.getElementById('enc-lid').checked;
+  const split = document.getElementById('enc-split').checked;
+  const box = document.getElementById('enc-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在生成双件式电子外壳及 PCB 导柱开窗源码...';
+
+  try {
+    const res = await fetch('/api/enclosure/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template: tmpl,
+        vent_pattern: vent,
+        wall_thickness: wall,
+        include_lid: lid,
+        split_layout: split
+      })
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      document.getElementById('scad-editor').value = data.scad;
+      const r = data.report;
+      box.innerHTML = `
+        <div style="color:#818cf8;font-weight:600;margin-bottom:4px;">✅ 电子外壳源码已载入编辑器</div>
+        <div style="font-size:0.72rem;color:var(--text);line-height:1.4;">
+          • 适配板型: <b>${r.board_name}</b><br>
+          • 外形包络: <b>${r.outer_dimensions_mm.join(' × ')} mm</b><br>
+          • PCB 导柱: ${r.standoff_count} 根 (H=${r.standoff_height_mm}mm) | I/O 面板开孔: ${r.io_cutouts_count} 处<br>
+          • 散热净面积: ${r.vent_open_area_mm2} mm² (${r.vent_open_ratio_pct}%)<br>
+          • 建议紧固件: ${r.recommended_hardware}
+        </div>
+      `;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
+  }
 }
 
 window.onload = function() {

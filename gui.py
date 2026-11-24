@@ -790,6 +790,10 @@ class MainWindow(QMainWindow):
         self.btn_sheetmetal.clicked.connect(self.on_open_sheetmetal_dialog)
         act_bar.addWidget(self.btn_sheetmetal)
 
+        self.btn_enclosure = QPushButton("🖥️ 电子外壳")
+        self.btn_enclosure.clicked.connect(self.on_open_enclosure_dialog)
+        act_bar.addWidget(self.btn_enclosure)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -2126,6 +2130,97 @@ class MainWindow(QMainWindow):
                 self.log("📥 钣金三维折弯源码已载入 OpenSCAD 编辑器")
         btn_load.clicked.connect(load_3d)
         btn_row.addWidget(btn_load)
+
+        d_lay.addLayout(btn_row)
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
+
+    def on_open_enclosure_dialog(self) -> None:
+        """打开智能电子外壳 PCB 导柱与散热开槽参数化生成器对话框。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QCheckBox
+        from openscad_agent.enclosure import PCB_TEMPLATES, EnclosureConfig, generate_enclosure_scad
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🖥️ 电子外壳与 PCB 导柱/I/O 开孔智能生成器")
+        dlg.resize(560, 500)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("PCB 开发板模板:"), 0, 0)
+        cmb_tmpl = QComboBox()
+        t_keys = list(PCB_TEMPLATES.keys()) + ["CUSTOM_GENERIC"]
+        cmb_tmpl.addItems([PCB_TEMPLATES[k]["name"] if k in PCB_TEMPLATES else "自定义通用 PCB (70x50mm)" for k in t_keys])
+        form_lay.addWidget(cmb_tmpl, 0, 1)
+
+        form_lay.addWidget(QLabel("散热开槽样式:"), 1, 0)
+        cmb_vent = QComboBox()
+        v_keys = ["linear_slots", "honeycomb", "circular_grid", "none"]
+        cmb_vent.addItems(["条形对流百叶槽 (linear_slots)", "六边形蜂窝散热孔 (honeycomb)", "圆形阵列孔 (circular_grid)", "全封闭外壳 (none)"])
+        form_lay.addWidget(cmb_vent, 1, 1)
+
+        form_lay.addWidget(QLabel("外壳壁厚 (mm):"), 2, 0)
+        spn_wall = QDoubleSpinBox()
+        spn_wall.setRange(1.2, 6.0)
+        spn_wall.setValue(2.4)
+        spn_wall.setSingleStep(0.2)
+        form_lay.addWidget(spn_wall, 2, 1)
+
+        chk_lid = QCheckBox("包含合盖顶盖与止口唇边 (平铺单板排版)")
+        chk_lid.setChecked(True)
+        form_lay.addWidget(chk_lid, 3, 0, 1, 2)
+
+        d_lay.addLayout(form_lay)
+
+        lbl_info = QLabel("壳体工程统计信息将在此显示…")
+        lbl_info.setStyleSheet("font-weight: 600; color: #4f46e5; padding: 6px; background: #eef2ff; border-radius: 4px;")
+        d_lay.addWidget(lbl_info)
+
+        txt_preview = QTextEdit()
+        txt_preview.setFontFamily("Monospace")
+        txt_preview.setFontPointSize(9)
+        d_lay.addWidget(txt_preview)
+
+        def update_enclosure():
+            cfg = EnclosureConfig(
+                template=t_keys[cmb_tmpl.currentIndex()],
+                vent_pattern=v_keys[cmb_vent.currentIndex()],
+                wall_thickness=spn_wall.value(),
+                include_lid=chk_lid.isChecked(),
+                split_layout=True,
+            )
+            code, rep = generate_enclosure_scad(cfg)
+            odims = rep["outer_dimensions_mm"]
+            lbl_info.setText(
+                f"外尺寸: {odims[0]}×{odims[1]}×{odims[2]} mm | "
+                f"PCB柱: {rep['standoff_count']}根 | I/O孔: {rep['io_cutouts_count']}处 | "
+                f"散热面积: {rep['vent_open_area_mm2']} mm² ({rep['vent_open_ratio_pct']}%)"
+            )
+            txt_preview.setText(code)
+
+        cmb_tmpl.currentIndexChanged.connect(lambda _: update_enclosure())
+        cmb_vent.currentIndexChanged.connect(lambda _: update_enclosure())
+        spn_wall.valueChanged.connect(lambda _: update_enclosure())
+        chk_lid.stateChanged.connect(lambda _: update_enclosure())
+        update_enclosure()
+
+        btn_row = QHBoxLayout()
+        btn_load = QPushButton("📥 载入至源码编辑器")
+        def load_code():
+            if hasattr(self, "txt_scad"):
+                self.txt_scad.setPlainText(txt_preview.toPlainText())
+                dlg.accept()
+                self.log("📥 电子外壳双件式源码已载入 OpenSCAD 编辑器")
+        btn_load.clicked.connect(load_code)
+        btn_row.addWidget(btn_load)
+
+        btn_copy = QPushButton("📋 复制源码")
+        def copy_code():
+            QApplication.clipboard().setText(txt_preview.toPlainText())
+            QMessageBox.information(dlg, "已复制", "电子外壳 OpenSCAD 源码已复制到剪贴板！")
+        btn_copy.clicked.connect(copy_code)
+        btn_row.addWidget(btn_copy)
 
         d_lay.addLayout(btn_row)
         bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)

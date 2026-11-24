@@ -2614,6 +2614,88 @@ def test_sheet_metal_bending_and_unfolding_engine():
             stop_server()
 
 
+def test_electronics_enclosure_and_pcb_engine():
+    """测试 47: 电子外壳 PCB 导柱/散热开槽/面板开孔智能生成引擎 (enclosure)"""
+    from openscad_agent.enclosure import (
+        IO_PORT_PROFILES,
+        PCB_TEMPLATES,
+        EnclosureConfig,
+        generate_pcb_standoff_scad,
+        generate_vent_grille_scad,
+        generate_enclosure_scad,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证 PCB 与 I/O 模板库完整度
+    for key in ["RASPBERRY_PI_4B", "ARDUINO_UNO", "ESP32_DEVKIT", "JETSON_ORIN_NANO"]:
+        assert key in PCB_TEMPLATES
+        assert len(PCB_TEMPLATES[key]["mounting_holes"]) == 4
+    for port in ["USB_C", "HDMI", "RJ45", "DC_BARREL"]:
+        assert port in IO_PORT_PROFILES
+
+    # 2. 验证 PCB 支撑柱与散热格栅独立原语生成
+    standoff_code = generate_pcb_standoff_scad(height=6.0, outer_d=6.5, hole_d=2.5, gusset_ribs=True)
+    assert "module pcb_standoff" in standoff_code
+    assert "四向十字径向加强筋" in standoff_code
+
+    vent_code, open_area = generate_vent_grille_scad(zone_width=50.0, zone_height=30.0, pattern="honeycomb")
+    assert "module enclosure_vent_cutter" in vent_code
+    assert open_area > 50.0
+
+    # 3. 验证树莓派 4B 双件式电子外壳代码生成与真实 CGAL 编译
+    cfg = EnclosureConfig(
+        template="RASPBERRY_PI_4B",
+        vent_pattern="linear_slots",
+        include_lid=True,
+        split_layout=True,
+    )
+    scad_code, rep = generate_enclosure_scad(cfg)
+    assert rep["standoff_count"] == 4
+    assert rep["io_cutouts_count"] == 7
+    assert rep["vent_open_area_mm2"] > 0
+    assert "enclosure_bottom();" in scad_code
+    assert "enclosure_lid();" in scad_code
+
+    renderer = OpenscadRenderer(AgentConfig())
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+        scad_f = tmp_dir / "test_rpi_enclosure.scad"
+        scad_f.write_text(scad_code, encoding="utf-8")
+        out_stl = tmp_dir / "test_rpi_enclosure.stl"
+        renderer.export_model(scad_f, out_stl, force=True)
+        assert out_stl.exists()
+
+    # 4. 验证 REST API 端点 (/api/enclosure/templates, /api/enclosure/generate)
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        _, _, port = serve_assets(work_dir, port=8996, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            r_tmpl = requests.get(f"{base}/api/enclosure/templates", timeout=5)
+            assert r_tmpl.status_code == 200
+            d_tmpl = r_tmpl.json()
+            assert d_tmpl["success"] is True
+            assert "RASPBERRY_PI_4B" in d_tmpl["templates"]
+
+            r_gen = requests.post(f"{base}/api/enclosure/generate", json={
+                "template": "ESP32_DEVKIT",
+                "vent_pattern": "honeycomb",
+                "include_lid": True,
+                "stem": "esp32_box",
+                "save": True,
+            }, timeout=5)
+            assert r_gen.status_code == 200
+            d_gen = r_gen.json()
+            assert d_gen["success"] is True
+            assert d_gen["report"]["standoff_count"] == 4
+            assert (work_dir / "esp32_box.scad").exists()
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2667,6 +2749,7 @@ def run_all_tests() -> bool:
         ("螺栓标准件智能紧固库与垫圈/沉头孔自动配准引擎 (fasteners)", test_standard_fasteners_and_counterbore_engine),
         ("工业管路与流体弯管/三通/法兰连接器生成引擎 (piping)", test_piping_and_fluid_manifold_engine),
         ("钣金折弯与展开下料图 DXF/SVG 引擎 (sheetmetal)", test_sheet_metal_bending_and_unfolding_engine),
+        ("电子外壳 PCB 导柱/散热开槽/面板开孔智能生成引擎 (enclosure)", test_electronics_enclosure_and_pcb_engine),
     ]
 
     all_ok = True

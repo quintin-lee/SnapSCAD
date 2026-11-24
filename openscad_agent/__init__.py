@@ -92,6 +92,14 @@ from .sheetmetal import (
     generate_sheet_metal_flat_svg,
     create_sheet_metal_preset,
 )
+from .enclosure import (
+    IO_PORT_PROFILES,
+    PCB_TEMPLATES,
+    EnclosureConfig,
+    generate_pcb_standoff_scad,
+    generate_vent_grille_scad,
+    generate_enclosure_scad,
+)
 
 __all__ = [
     "AgentConfig",
@@ -178,6 +186,12 @@ __all__ = [
     "generate_sheet_metal_flat_dxf",
     "generate_sheet_metal_flat_svg",
     "create_sheet_metal_preset",
+    "IO_PORT_PROFILES",
+    "PCB_TEMPLATES",
+    "EnclosureConfig",
+    "generate_pcb_standoff_scad",
+    "generate_vent_grille_scad",
+    "generate_enclosure_scad",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",
