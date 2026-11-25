@@ -794,6 +794,10 @@ class MainWindow(QMainWindow):
         self.btn_enclosure.clicked.connect(self.on_open_enclosure_dialog)
         act_bar.addWidget(self.btn_enclosure)
 
+        self.btn_cnc_dfm = QPushButton("⚙️ CNC 体检")
+        self.btn_cnc_dfm.clicked.connect(self.on_open_cnc_dfm_dialog)
+        act_bar.addWidget(self.btn_cnc_dfm)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -2223,6 +2227,85 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(btn_copy)
 
         d_lay.addLayout(btn_row)
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
+
+    def on_open_cnc_dfm_dialog(self) -> None:
+        """打开机械零件三轴 CNC 铣削可制造性体检与 CAM 工步顾问对话框。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+        from openscad_agent.cam_dfm import CNC_MATERIALS, check_cnc_machinability, generate_dogbone_pocket_scad
+
+        if not self._scad_path or not Path(self._scad_path).exists():
+            QMessageBox.information(self, "提示", "尚未生成模型。请先完成一次建模。")
+            return
+        scad_p = Path(self._scad_path)
+        cand_spec = scad_p.with_name(f"{scad_p.stem}_spec.json")
+        if not cand_spec.exists():
+            QMessageBox.information(self, "提示", f"未找到规格文件 ({cand_spec.name})。请先生成模型规格。")
+            return
+
+        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+        dlg = QDialog(self)
+        dlg.setWindowTitle("⚙️ 三轴 CNC 减材可制造性 (DFM) 与 CAM 工步顾问")
+        dlg.resize(600, 520)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("切削材料:"), 0, 0)
+        cmb_mat = QComboBox()
+        mat_keys = list(CNC_MATERIALS.keys())
+        cmb_mat.addItems([f"{k} - {CNC_MATERIALS[k]['name']}" for k in mat_keys])
+        form_lay.addWidget(cmb_mat, 0, 1)
+
+        form_lay.addWidget(QLabel("最小精铣刀径 (mm):"), 1, 0)
+        spn_tool = QDoubleSpinBox()
+        spn_tool.setRange(1.0, 12.0)
+        spn_tool.setValue(3.0)
+        spn_tool.setSingleStep(1.0)
+        form_lay.addWidget(spn_tool, 1, 1)
+        d_lay.addLayout(form_lay)
+
+        txt_rep = QTextEdit()
+        txt_rep.setReadOnly(True)
+        d_lay.addWidget(txt_rep)
+
+        def refresh_dfm():
+            mat_key = mat_keys[cmb_mat.currentIndex()]
+            rep = check_cnc_machinability(spec, material=mat_key, min_tool_d=spn_tool.value())
+            lines = [
+                f"📊 {rep.summary}",
+                f"• 建议毛坯包络: {rep.stock_dimensions_mm[0]} × {rep.stock_dimensions_mm[1]} × {rep.stock_dimensions_mm[2]} mm (毛坯 {rep.stock_volume_cm3:.1f} cm³ / 零件 {rep.part_volume_cm3:.1f} cm³)",
+                f"• 3 轴直接可加工性: {'✅ 合规' if rep.is_3axis_feasible else '⚠️ 存在不可清角或强风险项'}",
+                "",
+                "🛠️ 推荐 CAM 工步与参数表:",
+            ]
+            for op in rep.operations:
+                lines.append(
+                    f"  {op.step_no}. {op.operation_name}\n"
+                    f"     刀具: {op.tool_spec} | 转速: {op.spindle_rpm} RPM | 进给: {op.feed_rate_mm_min} mm/min | 切深: {op.step_down_mm}mm | 耗时: ~{op.est_time_min:.1f}min"
+                )
+            lines.append("")
+            lines.append("🔍 DFM 工艺体检诊断明细:")
+            if not rep.issues:
+                lines.append("  ✅ 未发现明显不可加工特征，可直接投入 CNC 编程！")
+            for iss in rep.issues:
+                lines.append(f"  [{iss.severity}] {iss.part_id} ({iss.issue_type}): {iss.description}\n     💡 建议: {iss.recommendation}")
+            txt_rep.setPlainText("\n".join(lines))
+
+        cmb_mat.currentIndexChanged.connect(lambda _: refresh_dfm())
+        spn_tool.valueChanged.connect(lambda _: refresh_dfm())
+        refresh_dfm()
+
+        btn_dog = QPushButton("🦴 复制狗骨头避让槽 (Dogbone) OpenSCAD 模块")
+        def copy_dog():
+            code = generate_dogbone_pocket_scad(tool_d=spn_tool.value())
+            QApplication.clipboard().setText(code)
+            QMessageBox.information(dlg, "已复制", "CNC 狗骨头避让内直角模块代码已复制到剪贴板！")
+        btn_dog.clicked.connect(copy_dog)
+        d_lay.addWidget(btn_dog)
+
         bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bbox.rejected.connect(dlg.reject)
         d_lay.addWidget(bbox)

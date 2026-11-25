@@ -100,6 +100,16 @@ from .enclosure import (
     generate_vent_grille_scad,
     generate_enclosure_scad,
 )
+from .cam_dfm import (
+    CNC_MATERIALS,
+    STANDARD_ENDMILLS,
+    CncIssue,
+    CamOperationStep,
+    CncDfmReport,
+    compute_cutting_params,
+    generate_dogbone_pocket_scad,
+    check_cnc_machinability,
+)
 
 __all__ = [
     "AgentConfig",
@@ -192,6 +202,14 @@ __all__ = [
     "generate_pcb_standoff_scad",
     "generate_vent_grille_scad",
     "generate_enclosure_scad",
+    "CNC_MATERIALS",
+    "STANDARD_ENDMILLS",
+    "CncIssue",
+    "CamOperationStep",
+    "CncDfmReport",
+    "compute_cutting_params",
+    "generate_dogbone_pocket_scad",
+    "check_cnc_machinability",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

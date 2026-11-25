@@ -200,6 +200,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2.5 CNC 切削材料与刀具规格库
+        if clean_path == "/api/cnc/materials":
+            try:
+                from .cam_dfm import CNC_MATERIALS, STANDARD_ENDMILLS
+                self.send_json({
+                    "success": True,
+                    "materials": CNC_MATERIALS,
+                    "endmills": STANDARD_ENDMILLS,
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -292,6 +305,23 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                         return
                     except Exception as e:
                         self.send_json({"error": f"生成紧固件 BOM 失败: {e}"}, status=500)
+                        return
+                else:
+                    self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
+                    return
+
+            if rest.endswith("/cnc_dfm"):
+                stem = rest.replace("/cnc_dfm", "").strip()
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        from .cam_dfm import check_cnc_machinability
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                        rep = check_cnc_machinability(spec)
+                        self.send_json({"success": True, "stem": stem, "report": rep.to_dict()})
+                        return
+                    except Exception as e:
+                        self.send_json({"error": f"执行 CNC DFM 体检失败: {e}"}, status=500)
                         return
                 else:
                     self.send_json({"error": f"未找到模型规格: {stem}"}, status=404)
@@ -969,6 +999,45 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 机械零件 CNC 三轴铣削可制造性体检与工步规划
+        if clean_path == "/api/cnc/dfm":
+            stem = body.get("stem", "")
+            spec = body.get("spec")
+            if not spec and stem:
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+            if not spec:
+                self.send_json({"error": "缺少 spec 或有效 stem"}, status=400)
+                return
+            try:
+                from .cam_dfm import check_cnc_machinability
+                mat = str(body.get("material", "ALUMINUM_6061"))
+                tool_d = float(body.get("min_tool_d", 3.0))
+                report = check_cnc_machinability(spec, material=mat, min_tool_d=tool_d)
+                self.send_json({"success": True, "stem": stem, "report": report.to_dict()})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        # CNC 狗骨头避让内直角槽代码生成
+        if clean_path == "/api/cnc/dogbone":
+            try:
+                from .cam_dfm import generate_dogbone_pocket_scad
+                scad = generate_dogbone_pocket_scad(
+                    width=float(body.get("width", 30.0)),
+                    height=float(body.get("height", 20.0)),
+                    depth=float(body.get("depth", 8.0)),
+                    tool_d=float(body.get("tool_d", 4.0)),
+                )
+                self.send_json({"success": True, "scad": scad})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1556,6 +1625,60 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     scad_f.write_text(scad_code, encoding="utf-8")
                     resp["scad_file"] = scad_f.name
                 return resp
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/cnc/materials")
+        def get_cnc_materials() -> dict[str, Any]:
+            from .cam_dfm import CNC_MATERIALS, STANDARD_ENDMILLS
+            return {"success": True, "materials": CNC_MATERIALS, "endmills": STANDARD_ENDMILLS}
+
+        @app.get("/api/model/{stem}/cnc_dfm")
+        def get_model_cnc_dfm(stem: str) -> dict[str, Any]:
+            cand_spec = out_dir / f"{stem}_spec.json"
+            if not cand_spec.exists():
+                raise HTTPException(status_code=404, detail=f"未找到规格: {stem}")
+            from .cam_dfm import check_cnc_machinability
+            try:
+                spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                rep = check_cnc_machinability(spec)
+                return {"success": True, "stem": stem, "report": rep.to_dict()}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/cnc/dfm")
+        def check_cnc_dfm_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            stem = body.get("stem", "")
+            spec = body.get("spec")
+            if not spec and stem:
+                cand_spec = out_dir / f"{stem}_spec.json"
+                if cand_spec.exists():
+                    try:
+                        spec = json.loads(cand_spec.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+            if not spec:
+                raise HTTPException(status_code=400, detail="缺少 spec 或有效 stem")
+            from .cam_dfm import check_cnc_machinability
+            try:
+                mat = str(body.get("material", "ALUMINUM_6061"))
+                tool_d = float(body.get("min_tool_d", 3.0))
+                rep = check_cnc_machinability(spec, material=mat, min_tool_d=tool_d)
+                return {"success": True, "stem": stem, "report": rep.to_dict()}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/cnc/dogbone")
+        def generate_dogbone_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            from .cam_dfm import generate_dogbone_pocket_scad
+            try:
+                scad = generate_dogbone_pocket_scad(
+                    width=float(body.get("width", 30.0)),
+                    height=float(body.get("height", 20.0)),
+                    depth=float(body.get("depth", 8.0)),
+                    tool_d=float(body.get("tool_d", 4.0)),
+                )
+                return {"success": True, "scad": scad}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

@@ -289,6 +289,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-piping', this)">🚰 工业管路</button>
       <button class="tab-btn" onclick="switchTab('tab-sheetmetal', this)">📐 钣金展开</button>
       <button class="tab-btn" onclick="switchTab('tab-enclosure', this)">🖥️ 电子外壳</button>
+      <button class="tab-btn" onclick="switchTab('tab-cnc', this)">⚙️ CNC DFM</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -730,6 +731,45 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
 
       <button onclick="triggerGenerateEnclosure()" class="btn-accent" style="width:100%;margin-bottom:8px;background:#6366f1;">⚡ 生成双件式电子外壳源码</button>
       <div id="enc-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:200px;overflow-y:auto;font-size:0.75rem;"></div>
+    </div>
+
+    <!-- CNC 三轴铣削可制造性体检与 CAM 工步规划面板 -->
+    <div id="tab-cnc" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>⚙️ CNC 减材铣削 DFM 与工步顾问 (CAM)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        排查内直角不可清角、深窄槽颤振、多面装夹风险，并计算加工工步 RPM / Feed。
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">毛坯切削材料:</label>
+          <select id="cnc-mat" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="ALUMINUM_6061" selected>6061-T6 铝合金</option>
+            <option value="STEEL_45">45# 中碳钢</option>
+            <option value="STAINLESS_304">SUS304 不锈钢</option>
+            <option value="BRASS_C360">C360 易切削黄铜</option>
+            <option value="POM_DELRIN">POM 赛钢塑料</option>
+          </select>
+        </div>
+        <div style="width:85px;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">最小立铣刀:</label>
+          <select id="cnc-tool" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="2.0">Ø2.0mm</option>
+            <option value="3.0" selected>Ø3.0mm</option>
+            <option value="4.0">Ø4.0mm</option>
+            <option value="6.0">Ø6.0mm</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button onclick="triggerCheckCncDfm()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;background:#b45309;">⚙️ 执行 CNC DFM 体检</button>
+        <button onclick="triggerCopyDogbone()" class="btn-secondary" style="flex:1;padding:6px;font-size:0.75rem;">🦴 复制狗骨避让槽模块</button>
+      </div>
+
+      <div id="cnc-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:260px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -2326,6 +2366,84 @@ async function triggerGenerateEnclosure() {
     }
   } catch (e) {
     box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
+  }
+}
+
+async function triggerCheckCncDfm() {
+  if (!activeModelStem) {
+    alert('请先在顶部选择一个模型');
+    return;
+  }
+  const mat = document.getElementById('cnc-mat').value;
+  const toolD = parseFloat(document.getElementById('cnc-tool').value) || 3.0;
+  const box = document.getElementById('cnc-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '正在执行三轴 CNC 减材可制造性体检...';
+
+  try {
+    const res = await fetch('/api/cnc/dfm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem: activeModelStem, material: mat, min_tool_d: toolD })
+    });
+    const data = await res.json();
+    if (data.success && data.report) {
+      const r = data.report;
+      let html = `
+        <div style="font-weight:700;color:${r.is_3axis_feasible ? '#10b981' : '#f59e0b'};margin-bottom:4px;">
+          ⚙️ CNC 评分: ${r.machinability_score}/100 | 节拍: ~${r.est_total_cycle_min} min | 装夹 ${r.setup_count} 次
+        </div>
+        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;">
+          毛坯包络: ${r.stock_dimensions_mm.join('×')}mm | 材料: ${r.material_name}
+        </div>
+      `;
+      if (r.operations && r.operations.length > 0) {
+        html += '<div style="font-weight:600;margin-bottom:2px;color:var(--text);">CAM 工步规划:</div>';
+        r.operations.forEach(op => {
+          html += `<div style="font-size:0.68rem;padding:3px 4px;border-bottom:1px solid rgba(255,255,255,0.05);">
+            <b>${op.step_no}. ${op.operation_name}</b> (${op.tool_spec})<br>
+            S=${op.spindle_rpm} RPM | F=${op.feed_rate_mm_min} mm/min | ~${op.est_time_min}m
+          </div>`;
+        });
+      }
+      if (r.issues && r.issues.length > 0) {
+        html += '<div style="font-weight:600;margin:6px 0 2px;color:#f59e0b;">DFM 工艺提示:</div>';
+        r.issues.forEach(it => {
+          html += `<div style="font-size:0.68rem;padding:3px 4px;border-left:3px solid ${it.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b'};margin-bottom:4px;">
+            <b>[${it.severity}]</b> ${it.description}<br><span style="color:var(--text-muted);">💡 ${it.recommendation}</span>
+          </div>`;
+        });
+      }
+      box.innerHTML = html;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">体检失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
+  }
+}
+
+async function triggerCopyDogbone() {
+  const toolD = parseFloat(document.getElementById('cnc-tool').value) || 4.0;
+  const box = document.getElementById('cnc-result-box');
+  box.style.display = 'block';
+
+  try {
+    const res = await fetch('/api/cnc/dogbone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ width: 30.0, height: 20.0, depth: 8.0, tool_d: toolD })
+    });
+    const data = await res.json();
+    if (data.success && data.scad) {
+      await navigator.clipboard.writeText(data.scad);
+      box.innerHTML = `
+        <div style="color:#10b981;font-weight:600;margin-bottom:4px;">🦴 狗骨避让槽模块已复制到剪贴板！</div>
+        <pre style="background:rgba(0,0,0,0.3);padding:6px;border-radius:4px;overflow-x:auto;font-size:0.7rem;">${data.scad}</pre>
+      `;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">异常: ${e}</div>`;
   }
 }
 

@@ -2696,6 +2696,112 @@ def test_electronics_enclosure_and_pcb_engine():
             stop_server()
 
 
+def test_cnc_machining_dfm_and_cam_advisor():
+    """测试 48: 机械零件 CNC 铣削特征工步与减材可制造性体检引擎 (cam_dfm)"""
+    from openscad_agent.cam_dfm import (
+        CNC_MATERIALS,
+        STANDARD_ENDMILLS,
+        compute_cutting_params,
+        generate_dogbone_pocket_scad,
+        check_cnc_machinability,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+
+    # 1. 验证切削材料库与 RPM / Feed 数学推算
+    assert "ALUMINUM_6061" in CNC_MATERIALS
+    assert "STEEL_45" in CNC_MATERIALS
+    assert len(STANDARD_ENDMILLS) >= 5
+    rpm_alu, feed_alu = compute_cutting_params(6.0, "ALUMINUM_6061")
+    rpm_ss, feed_ss = compute_cutting_params(6.0, "STAINLESS_304")
+    assert rpm_alu > rpm_ss
+    assert feed_alu > feed_ss
+
+    # 2. 验证 DFM 缺陷检出: 内直角凹槽 + 深窄槽 + 侧向孔多工位装夹
+    spec_cnc = {
+        "name": "cnc_manifold_bracket",
+        "parts": [
+            {
+                "id": "main_block",
+                "primitive": "cube",
+                "size": [80.0, 50.0, 25.0],
+                "center": [0.0, 0.0, 0.0],
+                "holes": [
+                    # 90° 无倒圆矩形盲槽 -> 触发 SHARP_INTERNAL_CORNER
+                    {"primitive": "cube", "size": [30.0, 4.0, 20.0], "center": [0.0, 0.0, 5.0]},
+                    # 侧向倾斜孔 -> 触发 MULTI_SETUP_REQUIRED
+                    {"primitive": "cylinder", "size": [4.5, 20.0], "center": [20.0, 0.0, 12.0], "transform": {"rotate": [90.0, 0.0, 0.0]}},
+                ],
+            }
+        ],
+    }
+    rep = check_cnc_machinability(spec_cnc, material="ALUMINUM_6061", min_tool_d=4.0)
+    assert rep.is_3axis_feasible is False  # 存在不可清角矩形内直角
+    assert rep.setup_count >= 2            # 顶面 + 侧面装夹
+    assert rep.machinability_score < 100
+    assert len(rep.operations) >= 3
+    issue_types = {i.issue_type for i in rep.issues}
+    assert "SHARP_INTERNAL_CORNER" in issue_types
+    assert "DEEP_POCKET_CHATTER" in issue_types
+    assert "MULTI_SETUP_REQUIRED" in issue_types
+
+    # 3. 验证狗骨避让内直角槽 OpenSCAD 代码生成与真实 CGAL 编译
+    dogbone_mod = generate_dogbone_pocket_scad(width=30.0, height=20.0, depth=10.0, tool_d=4.0)
+    assert "module cnc_dogbone_pocket" in dogbone_mod
+    scad_scene = f"""
+{dogbone_mod}
+difference() {{
+    translate([0, 0, 10]) cube([50, 40, 20], center = true);
+    translate([0, 0, 10]) cnc_dogbone_pocket(w = 30.0, h = 20.0, d = 10.5, tool_d = 4.0);
+}}
+"""
+    renderer = OpenscadRenderer(AgentConfig())
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+        scad_f = tmp_dir / "test_dogbone.scad"
+        scad_f.write_text(scad_scene, encoding="utf-8")
+        out_stl = tmp_dir / "test_dogbone.stl"
+        renderer.export_model(scad_f, out_stl, force=True)
+        assert out_stl.exists()
+
+    # 4. 验证 REST API 端点 (/api/cnc/materials, /api/cnc/dfm, /api/cnc/dogbone)
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        (work_dir / "cnc_part_spec.json").write_text(json.dumps(spec_cnc), encoding="utf-8")
+        _, _, port = serve_assets(work_dir, port=8997, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            r_mat = requests.get(f"{base}/api/cnc/materials", timeout=5)
+            assert r_mat.status_code == 200
+            d_mat = r_mat.json()
+            assert d_mat["success"] is True
+            assert "ALUMINUM_6061" in d_mat["materials"]
+
+            r_dfm = requests.post(f"{base}/api/cnc/dfm", json={
+                "stem": "cnc_part",
+                "material": "STEEL_45",
+                "min_tool_d": 3.0,
+            }, timeout=5)
+            assert r_dfm.status_code == 200
+            d_dfm = r_dfm.json()
+            assert d_dfm["success"] is True
+            assert d_dfm["report"]["material"] == "STEEL_45"
+            assert d_dfm["report"]["issues_count"] >= 3
+
+            r_dog = requests.post(f"{base}/api/cnc/dogbone", json={
+                "width": 25.0,
+                "height": 15.0,
+                "depth": 8.0,
+                "tool_d": 4.0,
+            }, timeout=5)
+            assert r_dog.status_code == 200
+            assert "cnc_dogbone_pocket" in r_dog.json()["scad"]
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2750,6 +2856,7 @@ def run_all_tests() -> bool:
         ("工业管路与流体弯管/三通/法兰连接器生成引擎 (piping)", test_piping_and_fluid_manifold_engine),
         ("钣金折弯与展开下料图 DXF/SVG 引擎 (sheetmetal)", test_sheet_metal_bending_and_unfolding_engine),
         ("电子外壳 PCB 导柱/散热开槽/面板开孔智能生成引擎 (enclosure)", test_electronics_enclosure_and_pcb_engine),
+        ("机械零件 CNC 铣削特征工步与减材可制造性体检引擎 (cam_dfm)", test_cnc_machining_dfm_and_cam_advisor),
     ]
 
     all_ok = True
