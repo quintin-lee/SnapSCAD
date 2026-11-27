@@ -213,6 +213,19 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 2.6 铝型材与直线运动部件目录
+        if clean_path == "/api/frame/catalog":
+            try:
+                from .frame_rig import EXTRUSION_PROFILES, LINEAR_COMPONENTS
+                self.send_json({
+                    "success": True,
+                    "profiles": EXTRUSION_PROFILES,
+                    "components": LINEAR_COMPONENTS,
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         # 3. 获取单模型详情 或 G-code 原始内容 或 矢量工程图纸
         if clean_path.startswith("/api/model/"):
             rest = clean_path.replace("/api/model/", "").strip()
@@ -1038,6 +1051,62 @@ class SnapSCADRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json({"success": False, "error": str(e)}, status=500)
             return
 
+        # 铝型材机架与直线运动平台代码生成
+        if clean_path == "/api/frame/generate":
+            try:
+                from .frame_rig import generate_extrusion_frame_scad
+                scad, cut_list = generate_extrusion_frame_scad(body)
+                self.send_json({"success": True, "scad": scad, "cut_list": cut_list})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        if clean_path == "/api/frame/axis":
+            try:
+                from .frame_rig import generate_linear_axis_scad
+                scad = generate_linear_axis_scad(
+                    axis=str(body.get("axis", "x")),
+                    length_mm=float(body.get("length_mm", 300.0)),
+                    component_type=str(body.get("component_type", "MGN12H")),
+                )
+                self.send_json({"success": True, "scad": scad})
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
+        if clean_path == "/api/frame/preset":
+            try:
+                from .frame_rig import create_motion_platform_preset
+                p_name = str(body.get("preset_name", "xy_table"))
+                w = float(body.get("width_mm", 300.0))
+                d = float(body.get("depth_mm", 300.0))
+                h = float(body.get("height_mm", 300.0))
+                prof = str(body.get("profile_type", "V2020"))
+                comp = str(body.get("axis_component", "MGN12H"))
+                scad, rep = create_motion_platform_preset(
+                    preset_name=p_name,
+                    width_mm=w,
+                    depth_mm=d,
+                    height_mm=h,
+                    profile_type=prof,
+                    axis_component=comp,
+                )
+                cand_file = None
+                if body.get("save", False):
+                    stem = str(body.get("stem", "frame_preset_out"))
+                    p = out_dir / f"{stem}.scad"
+                    p.write_text(scad, encoding="utf-8")
+                    cand_file = p.name
+                self.send_json({
+                    "success": True,
+                    "scad": scad,
+                    "report": rep.to_dict(),
+                    "file": cand_file,
+                })
+            except Exception as e:
+                self.send_json({"success": False, "error": str(e)}, status=500)
+            return
+
         self.send_json({"error": "未知的 API 端点"}, status=404)
 
 
@@ -1679,6 +1748,44 @@ def create_app(directory: Optional[str | Path] = None) -> Any:
                     tool_d=float(body.get("tool_d", 4.0)),
                 )
                 return {"success": True, "scad": scad}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get("/api/frame/catalog")
+        def get_frame_catalog() -> dict[str, Any]:
+            from .frame_rig import EXTRUSION_PROFILES, LINEAR_COMPONENTS
+            return {"success": True, "profiles": EXTRUSION_PROFILES, "components": LINEAR_COMPONENTS}
+
+        @app.post("/api/frame/preset")
+        def generate_frame_preset_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+            from .frame_rig import create_motion_platform_preset
+            try:
+                p_name = str(body.get("preset_name", "xy_table"))
+                w = float(body.get("width_mm", 300.0))
+                d = float(body.get("depth_mm", 300.0))
+                h = float(body.get("height_mm", 300.0))
+                prof = str(body.get("profile_type", "V2020"))
+                comp = str(body.get("axis_component", "MGN12H"))
+                scad, rep = create_motion_platform_preset(
+                    preset_name=p_name,
+                    width_mm=w,
+                    depth_mm=d,
+                    height_mm=h,
+                    profile_type=prof,
+                    axis_component=comp,
+                )
+                cand_file = None
+                if body.get("save", False):
+                    stem = str(body.get("stem", "frame_preset_out"))
+                    p = out_dir / f"{stem}.scad"
+                    p.write_text(scad, encoding="utf-8")
+                    cand_file = p.name
+                return {
+                    "success": True,
+                    "scad": scad,
+                    "report": rep.to_dict(),
+                    "file": cand_file,
+                }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

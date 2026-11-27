@@ -798,6 +798,10 @@ class MainWindow(QMainWindow):
         self.btn_cnc_dfm.clicked.connect(self.on_open_cnc_dfm_dialog)
         act_bar.addWidget(self.btn_cnc_dfm)
 
+        self.btn_frame_rig = QPushButton("🔩 型材机架")
+        self.btn_frame_rig.clicked.connect(self.on_open_frame_rig_dialog)
+        act_bar.addWidget(self.btn_frame_rig)
+
         self.btn_export_lib = QPushButton("📦 导出生态库")
         self.btn_export_lib.clicked.connect(self.on_export_library)
         act_bar.addWidget(self.btn_export_lib)
@@ -2305,6 +2309,118 @@ class MainWindow(QMainWindow):
             QMessageBox.information(dlg, "已复制", "CNC 狗骨头避让内直角模块代码已复制到剪贴板！")
         btn_dog.clicked.connect(copy_dog)
         d_lay.addWidget(btn_dog)
+
+        bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bbox.rejected.connect(dlg.reject)
+        d_lay.addWidget(bbox)
+        dlg.exec()
+
+    def on_open_frame_rig_dialog(self) -> None:
+        """打开铝型材机架与标准直线运动平台生成对话框。"""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox
+        from openscad_agent.frame_rig import EXTRUSION_PROFILES, create_motion_platform_preset
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔩 铝型材机架与直线运动平台生成器")
+        dlg.resize(600, 520)
+        d_lay = QVBoxLayout(dlg)
+
+        form_lay = QGridLayout()
+        form_lay.addWidget(QLabel("型材规格:"), 0, 0)
+        cmb_prof = QComboBox()
+        prof_keys = list(EXTRUSION_PROFILES.keys())
+        cmb_prof.addItems([f"{k} - {EXTRUSION_PROFILES[k]['name']}" for k in prof_keys])
+        form_lay.addWidget(cmb_prof, 0, 1)
+
+        form_lay.addWidget(QLabel("平台预设:"), 1, 0)
+        cmb_preset = QComboBox()
+        presets = [("xy_table", "XY 双轴工作台"), ("corexy_frame", "CoreXY 龙门机架"), ("z_axis", "单 Z 轴丝杠立柱")]
+        cmb_preset.addItems([p[1] for p in presets])
+        form_lay.addWidget(cmb_preset, 1, 1)
+
+        form_lay.addWidget(QLabel("宽度 W (mm):"), 2, 0)
+        spn_w = QDoubleSpinBox()
+        spn_w.setRange(100.0, 1500.0)
+        spn_w.setValue(300.0)
+        spn_w.setSingleStep(50.0)
+        form_lay.addWidget(spn_w, 2, 1)
+
+        form_lay.addWidget(QLabel("深度 D (mm):"), 3, 0)
+        spn_d = QDoubleSpinBox()
+        spn_d.setRange(100.0, 1500.0)
+        spn_d.setValue(300.0)
+        spn_d.setSingleStep(50.0)
+        form_lay.addWidget(spn_d, 3, 1)
+
+        form_lay.addWidget(QLabel("高度 H (mm):"), 4, 0)
+        spn_h = QDoubleSpinBox()
+        spn_h.setRange(100.0, 1500.0)
+        spn_h.setValue(300.0)
+        spn_h.setSingleStep(50.0)
+        form_lay.addWidget(spn_h, 4, 1)
+        d_lay.addLayout(form_lay)
+
+        txt_rep = QTextEdit()
+        txt_rep.setReadOnly(True)
+        d_lay.addWidget(txt_rep)
+
+        last_scad = [""]
+
+        def refresh_frame():
+            prof_key = prof_keys[cmb_prof.currentIndex()]
+            preset_key = presets[cmb_preset.currentIndex()][0]
+            scad, rep = create_motion_platform_preset(
+                preset_name=preset_key,
+                width_mm=spn_w.value(),
+                depth_mm=spn_d.value(),
+                height_mm=spn_h.value(),
+                profile_type=prof_key,
+            )
+            last_scad[0] = scad
+            lines = [
+                f"📊 机架规格: {rep.profile_type} ({spn_w.value():.0f}×{spn_d.value():.0f}×{spn_h.value():.0f} mm)",
+                f"• 总铝型材用量: {rep.total_extrusion_mm:.1f} mm (~{rep.estimated_mass_kg:.2f} kg)",
+                "",
+                "✂️ 型材下料切料清单 (Cut List):",
+            ]
+            for p, cuts in rep.cut_list.items():
+                lines.append(f"  • {p}: 共 {len(cuts)} 根 ({', '.join(f'{c:.1f}mm' for c in cuts)})")
+            lines.append("")
+            lines.append("📋 机构与紧固件物料清单 (BOM):")
+            for comp, qty in rep.component_bom.items():
+                lines.append(f"  • {comp}: {qty}")
+            if rep.warnings:
+                lines.append("")
+                lines.append("⚠️ 结构建议:")
+                for w in rep.warnings:
+                    lines.append(f"  • {w}")
+            txt_rep.setPlainText("\n".join(lines))
+
+        cmb_prof.currentIndexChanged.connect(lambda _: refresh_frame())
+        cmb_preset.currentIndexChanged.connect(lambda _: refresh_frame())
+        spn_w.valueChanged.connect(lambda _: refresh_frame())
+        spn_d.valueChanged.connect(lambda _: refresh_frame())
+        spn_h.valueChanged.connect(lambda _: refresh_frame())
+        refresh_frame()
+
+        btn_box = QHBoxLayout()
+        btn_load = QPushButton("📥 载入源码到编辑器")
+        def load_to_ed():
+            if last_scad[0] and hasattr(self, "editor_scad"):
+                self.editor_scad.setPlainText(last_scad[0])
+                QMessageBox.information(dlg, "已载入", "机架 OpenSCAD 源码已载入主编辑器！")
+                dlg.accept()
+        btn_load.clicked.connect(load_to_ed)
+        btn_box.addWidget(btn_load)
+
+        btn_copy = QPushButton("📋 复制 SCAD 源码")
+        def copy_scad():
+            if last_scad[0]:
+                QApplication.clipboard().setText(last_scad[0])
+                QMessageBox.information(dlg, "已复制", "机架 OpenSCAD 源码已复制到剪贴板！")
+        btn_copy.clicked.connect(copy_scad)
+        btn_box.addWidget(btn_copy)
+        d_lay.addLayout(btn_box)
 
         bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bbox.rejected.connect(dlg.reject)

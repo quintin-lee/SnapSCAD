@@ -2802,6 +2802,111 @@ difference() {{
             stop_server()
 
 
+def test_aluminum_extrusion_frame_and_linear_rig():
+    """测试铝型材机架与标准直线导轨/丝杠运动平台生成引擎 (frame_rig) 及 REST API。"""
+    from openscad_agent.frame_rig import (
+        EXTRUSION_PROFILES,
+        LINEAR_COMPONENTS,
+        FrameRigReport,
+        generate_extrusion_frame_scad,
+        generate_linear_axis_scad,
+        create_motion_platform_preset,
+    )
+    from openscad_agent.core import OpenscadRenderer, AgentConfig
+    from openscad_agent.server import serve_assets, stop_server
+    import requests
+    import time
+
+    # 1. 验证型材规格库与部件库完备性
+    for prof_key in ["V2020", "V2040", "V3030", "V4040", "T2020", "T3030"]:
+        assert prof_key in EXTRUSION_PROFILES
+        assert EXTRUSION_PROFILES[prof_key]["width_mm"] > 0
+        assert EXTRUSION_PROFILES[prof_key]["slot_width_mm"] in (6.0, 8.0)
+
+    for comp_key in ["ROD_8MM", "ROD_12MM", "MGN12H", "T8_LEADSCREW", "NEMA17"]:
+        assert comp_key in LINEAR_COMPONENTS
+
+    # 2. 验证参数化机架 SCAD 与切料清单生成
+    frame_scad, cut_list = generate_extrusion_frame_scad({
+        "profile_type": "V2020",
+        "width_mm": 250.0,
+        "depth_mm": 250.0,
+        "height_mm": 200.0,
+        "corner_bracket": True,
+    })
+    assert "extrusion_beam" in frame_scad
+    assert "corner_bracket" in frame_scad
+    assert "V2020" in cut_list
+    assert len(cut_list["V2020"]) == 12  # 4立柱 + 4X + 4Y
+
+    # 3. 验证三种直线运动机构 SCAD 生成
+    rod_scad = generate_linear_axis_scad("x", 200.0, "ROD_8MM")
+    assert "cylinder" in rod_scad
+    assert "rotate([0, 90, 0])" in rod_scad
+
+    rail_scad = generate_linear_axis_scad("y", 250.0, "MGN12H")
+    assert "cube" in rail_scad
+    assert "rotate([90, 0, 0])" in rail_scad
+
+    screw_scad = generate_linear_axis_scad("z", 300.0, "T8_LEADSCREW")
+    assert "NEMA17" in screw_scad or "cylinder" in screw_scad
+
+    # 4. 验证运动平台预设与 OpenSCAD 实体编译
+    plat_scad, rep = create_motion_platform_preset(
+        preset_name="xy_table",
+        width_mm=200.0,
+        depth_mm=200.0,
+        height_mm=150.0,
+        profile_type="V2020",
+        axis_component="MGN12H",
+    )
+    assert isinstance(rep, FrameRigReport)
+    assert rep.total_extrusion_mm > 0
+    assert rep.estimated_mass_kg > 0
+    assert "NEMA17 步进电机" in rep.component_bom
+
+    renderer = OpenscadRenderer(AgentConfig())
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+        scad_f = tmp_dir / "test_frame_rig.scad"
+        scad_f.write_text(plat_scad, encoding="utf-8")
+        out_stl = tmp_dir / "test_frame_rig.stl"
+        renderer.export_model(scad_f, out_stl, force=True)
+        assert out_stl.exists()
+        assert out_stl.stat().st_size > 500
+
+    # 5. 验证 REST API 端点 (/api/frame/catalog, /api/frame/preset)
+    with tempfile.TemporaryDirectory() as td_api:
+        work_dir = Path(td_api)
+        _, _, port = serve_assets(work_dir, port=8998, open_browser=False, blocking=False)
+        time.sleep(0.5)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            r_cat = requests.get(f"{base}/api/frame/catalog", timeout=5)
+            assert r_cat.status_code == 200
+            d_cat = r_cat.json()
+            assert d_cat["success"] is True
+            assert "V2020" in d_cat["profiles"]
+            assert "MGN12H" in d_cat["components"]
+
+            r_pre = requests.post(f"{base}/api/frame/preset", json={
+                "preset_name": "corexy_frame",
+                "profile_type": "V2020",
+                "width_mm": 250.0,
+                "depth_mm": 250.0,
+                "height_mm": 200.0,
+                "save": True,
+                "stem": "test_corexy_out",
+            }, timeout=5)
+            assert r_pre.status_code == 200
+            d_pre = r_pre.json()
+            assert d_pre["success"] is True
+            assert (work_dir / "test_corexy_out.scad").exists()
+            assert d_pre["report"]["total_extrusion_mm"] > 0
+        finally:
+            stop_server()
+
+
 def run_all_tests() -> bool:
     """运行全套自动化测试并输出报告。"""
     print("\n" + "=" * 60)
@@ -2857,6 +2962,7 @@ def run_all_tests() -> bool:
         ("钣金折弯与展开下料图 DXF/SVG 引擎 (sheetmetal)", test_sheet_metal_bending_and_unfolding_engine),
         ("电子外壳 PCB 导柱/散热开槽/面板开孔智能生成引擎 (enclosure)", test_electronics_enclosure_and_pcb_engine),
         ("机械零件 CNC 铣削特征工步与减材可制造性体检引擎 (cam_dfm)", test_cnc_machining_dfm_and_cam_advisor),
+        ("铝型材机架与标准直线导轨/丝杠运动平台生成器 (frame_rig)", test_aluminum_extrusion_frame_and_linear_rig),
     ]
 
     all_ok = True

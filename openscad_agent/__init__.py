@@ -110,6 +110,14 @@ from .cam_dfm import (
     generate_dogbone_pocket_scad,
     check_cnc_machinability,
 )
+from .frame_rig import (
+    EXTRUSION_PROFILES,
+    LINEAR_COMPONENTS,
+    FrameRigReport,
+    generate_extrusion_frame_scad,
+    generate_linear_axis_scad,
+    create_motion_platform_preset,
+)
 
 __all__ = [
     "AgentConfig",
@@ -210,6 +218,12 @@ __all__ = [
     "compute_cutting_params",
     "generate_dogbone_pocket_scad",
     "check_cnc_machinability",
+    "EXTRUSION_PROFILES",
+    "LINEAR_COMPONENTS",
+    "FrameRigReport",
+    "generate_extrusion_frame_scad",
+    "generate_linear_axis_scad",
+    "create_motion_platform_preset",
     "package_project",
     "export_scad_library",
     "upload_to_3d_printer",

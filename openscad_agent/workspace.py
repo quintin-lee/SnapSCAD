@@ -290,6 +290,7 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       <button class="tab-btn" onclick="switchTab('tab-sheetmetal', this)">📐 钣金展开</button>
       <button class="tab-btn" onclick="switchTab('tab-enclosure', this)">🖥️ 电子外壳</button>
       <button class="tab-btn" onclick="switchTab('tab-cnc', this)">⚙️ CNC DFM</button>
+      <button class="tab-btn" onclick="switchTab('tab-frame', this)">🔩 型材机架</button>
       <button class="tab-btn" onclick="switchTab('tab-slicer', this)">🍰 切片工艺</button>
     </div>
 
@@ -770,6 +771,59 @@ def generate_workspace_html(output_dir: str | Path, html_filename: str = "worksp
       </div>
 
       <div id="cnc-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:260px;overflow-y:auto;font-size:0.75rem;"></div>
+    </div>
+
+    <!-- 铝型材机架与直线运动平台面板 -->
+    <div id="tab-frame" class="tab-content">
+      <h4 style="margin:0 0 10px 0;font-size:0.9rem;color:var(--text);display:flex;align-items:center;gap:6px;">
+        <span>🔩 铝型材机架与直线运动机构 (Frame & Rig)</span>
+      </h4>
+      <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px;">
+        参数化生成 V/T 槽铝型材框架、MGN12/光轴/丝杠单轴直线模组与 3D 打印/CNC 运动平台预设。
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">型材规格:</label>
+          <select id="frame-profile" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="V2020" selected>欧标 V-slot 2020 (6mm槽)</option>
+            <option value="V2040">欧标 V-slot 2040 (6mm槽)</option>
+            <option value="V3030">欧标 V-slot 3030 (8mm槽)</option>
+            <option value="V4040">欧标 V-slot 4040 (8mm槽)</option>
+            <option value="T2020">T-slot 2020</option>
+            <option value="T3030">T-slot 3030</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px;">机构平台预设:</label>
+          <select id="frame-preset" style="width:100%;padding:5px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+            <option value="xy_table" selected>XY 双轴滑动工作台</option>
+            <option value="corexy_frame">CoreXY 龙门打印机架</option>
+            <option value="z_axis">单 Z 轴梯形丝杠立柱</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">宽 W(mm):</label>
+          <input type="number" id="frame-w" value="300" min="100" max="1000" step="50" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">深 D(mm):</label>
+          <input type="number" id="frame-d" value="300" min="100" max="1000" step="50" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:2px;">高 H(mm):</label>
+          <input type="number" id="frame-h" value="300" min="100" max="1000" step="50" style="width:100%;padding:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button onclick="triggerGenerateFrame()" class="btn-accent" style="flex:1;padding:6px;font-size:0.75rem;background:#475569;">🔩 生成机架平台 & 切料清单</button>
+      </div>
+
+      <div id="frame-result-box" style="display:none;background:var(--bg-card);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:260px;overflow-y:auto;font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -2444,6 +2498,63 @@ async function triggerCopyDogbone() {
     }
   } catch (e) {
     box.innerHTML = `<div style="color:#ef4444;">异常: ${e}</div>`;
+  }
+}
+
+async function triggerGenerateFrame() {
+  const prof = document.getElementById('frame-profile').value;
+  const preset = document.getElementById('frame-preset').value;
+  const w = parseFloat(document.getElementById('frame-w').value) || 300.0;
+  const d = parseFloat(document.getElementById('frame-d').value) || 300.0;
+  const h = parseFloat(document.getElementById('frame-h').value) || 300.0;
+  const box = document.getElementById('frame-result-box');
+  box.style.display = 'block';
+  box.innerHTML = '<div style="color:var(--text-muted);">正在生成机架与运动组件模型...</div>';
+
+  try {
+    const res = await fetch('/api/frame/preset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        preset_name: preset,
+        profile_type: prof,
+        width_mm: w,
+        depth_mm: d,
+        height_mm: h,
+        save: false
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const rep = data.report;
+      let cutHtml = '';
+      if (rep.cut_list) {
+        for (const [k, v] of Object.entries(rep.cut_list)) {
+          cutHtml += `<div>• <b>${k}</b>: 共 ${v.length} 根 (${v.join(', ')} mm)</div>`;
+        }
+      }
+      let bomHtml = '';
+      if (rep.component_bom) {
+        for (const [k, v] of Object.entries(rep.component_bom)) {
+          bomHtml += `<div>• ${k}: ${v}</div>`;
+        }
+      }
+      box.innerHTML = `
+        <div style="color:#10b981;font-weight:600;margin-bottom:4px;">✅ 机架模型生成成功！</div>
+        <div style="font-size:0.75rem;margin-bottom:6px;">
+          <div><b>总型材用量:</b> ${rep.total_extrusion_mm} mm (预估质量: ${rep.estimated_mass_kg} kg)</div>
+          <div style="margin-top:4px;"><b>型材下料切料清单 (Cut List):</b></div>
+          ${cutHtml}
+          <div style="margin-top:4px;"><b>机构标准件 BOM:</b></div>
+          ${bomHtml}
+        </div>
+        <button onclick="applyScadCode(decodeURIComponent('${encodeURIComponent(data.scad)}'))" class="btn-accent" style="width:100%;padding:4px;font-size:0.75rem;">📥 载入机架源码到编辑器</button>
+      `;
+    } else {
+      box.innerHTML = `<div style="color:#ef4444;">生成失败: ${data.error || '未知错误'}</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;">请求异常: ${e}</div>`;
   }
 }
 
